@@ -1,0 +1,35 @@
+FP heuristic based on first-order-methods (PDLP).
+
+Requirements
+------------
+
+- CMake >= 3.12
+- One of: CPLEX >= 12.10, COPT >= 7.0, Gurobi >= 11.0, Xpress
+- Recent C++ compiler supporting some C++20 (gcc >= 10.0 or clang >= 11.0 should do)
+
+Build
+-----
+
+> mkdir build
+> cd build
+> cmake -DCMAKE_BUILD_TYPE=Release -CPLEXDIR=${PATH_TO_CPLEX_INSTALLATION} -DXPRESSDIR=${PATH_TO_XPRESS_INSTALLATION} -DGUROBIDIR=${PATH_TO_GUROBI_INSTALLATION} -DXPRESSDIR=${PATH_TO_XPRESS_INSTALLTION}
+
+At least one solver must be available. It is not mandatory, to specify the installation directories. The CMakeLists file will search the 'solvers' directory for the respective installations by default. One can either symlink the required libraries or copy them into the 'solvers' directory. See also 'extern/utils/cmake' for the cmake lookup files.
+
+The above instructions will generate one binary 'fp_main'.
+
+Usage
+-----
+
+To query usage of the binary, run either 'fp_main' or 'fp_main -h'.
+This will display instructions on how to run fp_main and how to set options.
+
+Generally, fp_main is executed as
+
+> fp_main instance_file [options]
+
+for example running PDLP based fix-and-propagate as the redcost strategy for ranking the variables during the fix-and-propagate run and using the lp solution value for picking a value to fix the variables to, run
+
+> fp_main <path_to_instance>/<instance_name> presolver=GUROBI solver=COPT lpMethod=FOM ranker=REDCOSTS valueChooser=RANDOM_LP maxTries=1
+
+The best solution found will be written to a file called <instance_name>.sol.

@@ -1,0 +1,271 @@
+/**
+ * @file dfs.h
+ * @brief Depth first serach
+ *
+ * @author Domenico Salvagnin <dominiqs at gmail dot com>
+ * @contributor Nils-Christian Kempke <nilskempke at gmail dot com>
+ *
+ * @date 2020-2025
+ *
+ * Copyright 2020 Domenico Salvagnin
+ * Copyright 2025 Nils-Christian Kempke
+ */
+
+#pragma once
+
+#include "mip.h"
+#include "tool_app.h"
+#include "propagation.h"
+
+#include <consolelog.h>
+#include <timer.h>
+
+#include <numeric>
+#include <iostream>
+
+struct Branch
+{
+public:
+	Branch() = default;
+	Branch(int i, char s, double b) : index(i), sense(s), bound(b) {}
+	int index = -1; /**< column/clique index */
+	char sense;		/**< 'L','U','B' for lower, upper, both respectively */
+	double bound;	/**< new bound */
+};
+
+/* Node data structure */
+struct Node
+{
+public:
+	Node(Branch b, Domain::iterator _tp, size_t _d) : branch{b}, trailp(_tp), depth(_d) {}
+	Branch branch;
+	Domain::iterator trailp;
+	size_t depth;
+};
+
+/* Policy Class to customize DFS behaviour */
+class DFSStrategy
+{
+public:
+	virtual ~DFSStrategy() {}
+	virtual std::vector<Branch> branch(const Domain &domain, bool nodeInfeas, const Branch &oldBranch) = 0;
+};
+
+/** Perform DFS on a given problem: customization of behaviour is provided via StrategyT */
+template <typename StrategyT>
+void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
+{
+	const MIPData &data{worker->mipdata};
+	const MIPInstance &mip{data.mip};
+	PropagationEngine &engine{worker->engine};
+	SolutionPool &pool{worker->solpool};
+	const Domain &domain = engine.getDomain();
+	int n = mip.ncols;
+	FP_ASSERT(n == domain.ncols());
+	MIPModelPtr lp = worker->lp;
+	FP_ASSERT(lp);
+	int consecutiveInfeas = 0;
+	int maxConsecutiveInfeas = (int)(params.maxConsecutiveInfeas * n);
+
+	std::vector<Node> nodes;
+	std::vector<int> allIdx(n);
+	std::iota(allIdx.begin(), allIdx.end(), 0);
+
+	// push root node
+	Domain::iterator start_mark = engine.mark();
+	nodes.emplace_back(Branch{}, start_mark, 0);
+	int nodecnt = 0;
+	int lpSolved = 0;
+	int numSolutions = 0;
+	size_t maxDepth = 0;
+
+	const std::string strat_name = fmt::format("{}_{}", toString(params.ranker), toString(params.valueChooser));
+
+	auto branch2str = [&](const Branch &br)
+	{
+		const char *sense;
+		if (br.sense == 'B')
+			sense = "=";
+		else if (br.sense == 'L')
+			sense = ">=";
+		else
+			sense = "<=";
+		return fmt::format("{} {} {}", mip.cNames[br.index], sense, br.bound);
+	};
+
+	// DFS
+	while (!nodes.empty())
+	{
+		// pop node
+		Node node = nodes.back();
+		nodes.pop_back();
+		// backtrack
+		engine.undo(node.trailp);
+		const Branch &branch = node.branch;
+		// engine.debugChecks();
+		// apply branch
+		if (branch.index != -1)
+		{
+			// consoleLog("Apply branching {}", branch2str(branch));
+			// standard variable branch
+			if (branch.sense == 'U')
+			{
+				bool nodeInfeas = engine.changeUpperBound(branch.index, branch.bound);
+				FP_ASSERT(!nodeInfeas);
+			}
+			else if (branch.sense == 'L')
+			{
+				bool nodeInfeas = engine.changeLowerBound(branch.index, branch.bound);
+				FP_ASSERT(!nodeInfeas);
+			}
+			else
+			{
+				bool nodeInfeas = engine.changeLowerBound(branch.index, branch.bound);
+				FP_ASSERT(!nodeInfeas);
+				nodeInfeas = engine.changeUpperBound(branch.index, branch.bound);
+				FP_ASSERT(!nodeInfeas);
+			}
+		}
+
+		nodecnt++;
+		maxDepth = std::max(maxDepth, node.depth);
+
+		bool nodeInfeas = (!engine.violatedRows().empty());
+
+		// propagate & repair
+		if (params.propagate)
+			nodeInfeas = engine.propagate(false);
+
+		if (params.enableOutput && ((nodecnt % params.displayInterval) == 0))
+			consoleLog("{}: {} nodes processed: depth={} violation={} elapsed={}", strat_name,
+					   nodecnt, node.depth, engine.violation(), gStopWatch().getElapsed());
+
+		if (!engine.violatedRows().empty())
+		{
+			consecutiveInfeas++;
+			if (params.backtrackOnInfeas)
+				continue;
+		}
+		else
+		{
+			consecutiveInfeas = 0;
+		}
+
+		// branch (other customization point)
+		const Domain &domain = engine.getDomain();
+		std::vector<Branch> branches = strategy.branch(domain, nodeInfeas, branch);
+
+		if (branches.empty())
+		{
+			consoleLog("{}: {} nodes processed: depth={} violation={} elapsed={}", strat_name,
+					   nodecnt, node.depth, engine.violation(), gStopWatch().getElapsed());
+
+			/* End of dive */
+
+			/* If there are continuous variables, we need to compute their values by solving a LP */
+			if (data.nContinuous && !nodeInfeas)
+			{
+				// consoleLog("Leaf: solving LP");
+				// copy bounds from domain to LP
+				lp->lbs(allIdx.size(), allIdx.data(), domain.lbs().data());
+				lp->ubs(allIdx.size(), allIdx.data(), domain.ubs().data());
+
+				// solve LP
+				consoleLog("{}: Time starting LP solve = {}", strat_name, gStopWatch().getElapsed());
+				lp->intParam(IntParam::Threads, params.threads);
+				lp->logging(params.enableOutput);
+				lp->dblParam(DblParam::TimeLimit, std::max(params.timeLimit - gStopWatch().getElapsed(), 0.0));
+
+				/* This should be solved with higher precision. We should always use 1e-6. Maybe even 1e-8? */
+				lp->lpopt(solverChar(params.lpMethodFinal), 1e-6);
+				consoleLog("{}: Time finished LP solve = {}", strat_name, gStopWatch().getElapsed());
+				lpSolved++;
+
+				if (lp->isPrimalFeas())
+				{
+					consoleLog("{}: LP solved to optimality!", strat_name);
+
+					// looks like we have found a solution
+					std::vector<double> x(n);
+					lp->sol(x.data());
+					// copy solution back to engine
+					for (int j = 0; j < domain.ncols(); j++)
+					{
+						if (!equal(domain.lb(j), domain.ub(j), ABS_FEASTOL))
+						{
+							engine.fix(j, std::max(std::min(domain.ub(j), x[j]), domain.lb(j)));
+						}
+						FP_ASSERT(equal(domain.lb(j), domain.ub(j), ABS_FEASTOL));
+					}
+					// FP_ASSERT( engine.violatedRows().empty() );
+					consoleLog("{}: Objective {}", strat_name, evalObj(mip, x));
+					if (!engine.violatedRows().empty())
+					{
+						nodeInfeas = true;
+					}
+				}
+				else
+				{
+					consoleLog("{}: LP relaxation infeasible", strat_name);
+					nodeInfeas = true;
+				}
+			}
+
+			if (data.nContinuous)
+			{
+				// The solution got infeasible when solving the LP for the continuous variables
+				// Hence, the engine does not yet have a complete solution. Make sure it does.
+				for (int j = 0; j < domain.ncols(); j++)
+				{
+					if (!equal(domain.lb(j), domain.ub(j), ABS_FEASTOL))
+					{
+						engine.fix(j, domain.lb(j));
+					}
+					FP_ASSERT(equal(domain.lb(j), domain.ub(j), ABS_FEASTOL));
+				}
+			}
+
+			/* Add solution to pool no matter what */
+			std::vector<double> x{domain.lbs().begin(), domain.lbs().end()};
+			double objval = evalObj(mip, x);
+			bool isFeas = isSolFeasible(mip, x);
+			SolutionPtr sol = makeFromSpan(mip, x, objval, isFeas, engine.violation());
+			sol->timeFound = gStopWatch().getElapsed();
+			sol->foundBy = strat_name;
+
+			pool.add(sol);
+			if (isFeas)
+				numSolutions++;
+		}
+		else
+		{
+			// consoleLog("{}-way branch at depth {}", branches.size(), node.depth);
+			// add them in reverse order (this is a stack after all)
+			for (auto itr = branches.rbegin(); itr != branches.rend(); ++itr)
+			{
+				nodes.emplace_back(*itr, domain.mark(), node.depth + 1);
+			}
+		}
+
+		// termination criteria
+		if ((nodecnt >= params.maxNodes) ||
+			(lpSolved >= params.maxLpSolved) ||
+			(numSolutions >= params.maxSolutions) ||
+			(consecutiveInfeas >= maxConsecutiveInfeas) ||
+			(gStopWatch().getElapsed() >= params.timeLimit) ||
+			UserBreak)
+		{
+			consoleLog("{}: Limits reached", strat_name);
+			break;
+		}
+	}
+	if (nodes.empty())
+		consoleLog("{}: Nodes emtpy", strat_name);
+
+	// cleanup
+	engine.undo(start_mark);
+
+	// make sure we restore the correct bounds on the LP object
+	lp->lbs(allIdx.size(), allIdx.data(), mip.lb.data());
+	lp->ubs(allIdx.size(), allIdx.data(), mip.ub.data());
+}
