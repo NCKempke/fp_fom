@@ -21,8 +21,7 @@ The above instructions will generate one binary 'fp_main'.
 Usage
 -----
 
-To query usage of the binary, run either 'fp_main' or 'fp_main -h'.
-This will display instructions on how to run fp_main and how to set options.
+To query usage of the binary, run either 'fp_main' or 'fp_main -h'. This will display instructions on how to run fp_main and how to set options.
 
 Generally, fp_main is executed as
 
@@ -30,6 +29,6 @@ Generally, fp_main is executed as
 
 for example running PDLP based fix-and-propagate as the redcost strategy for ranking the variables during the fix-and-propagate run and using the lp solution value for picking a value to fix the variables to, run
 
-> fp_main <path_to_instance>/<instance_name> presolver=GUROBI solver=COPT lpMethod=FOM ranker=REDCOSTS valueChooser=RANDOM_LP maxTries=1
+> fp_main <path_to_instance>/<instance_name> presolver=GUROBI solver=COPT lpMethod=FOM ranker=REDCOSTS valueChooser=RANDOM_LP
 
-The best solution found will be written to a file called <instance_name>.sol.
+The best solution found will be written to a file called <instance_name>.sol only if either presolve is turned off or CPLEX is specified as PRESOLVER. Gurobi does not support postsolve.
