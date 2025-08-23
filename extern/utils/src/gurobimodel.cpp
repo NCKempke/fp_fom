@@ -161,6 +161,7 @@ void GUROBIModel::lpopt(char method, double tol)
         throw std::runtime_error("Unexpected method for GUROBI lpopt");
     }
 
+    GUROBI_CALL_ENV(GRBsetintparam, GRBgetenv(prob), GRB_INT_PAR_BARITERLIMIT, 1000);
     GUROBI_CALL(GRBoptimize, GRBgetenv(prob), prob);
 
     /* Reset parameters to defaults. */

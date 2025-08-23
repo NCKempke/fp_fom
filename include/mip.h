@@ -254,9 +254,9 @@ struct Params
 public:
 	/* Global parameters */
 	uint64_t seed = 20250101;
-	double timeLimit = 600;
-	int threads = 4;
-	int maxTries = 100;
+	double timeLimit = 1200;
+	int threads = 32;
+	int maxTries = 1;
 	/* Output. */
 	bool enableOutput = true;
 	int displayInterval = 500;
@@ -264,19 +264,19 @@ public:
 	bool propagate = true;
 	bool backtrackOnInfeas = true;
 	double maxConsecutiveInfeas = 0.2; /** node limit as fraction of variables */
-	int minNodes = 1000;
+	int minNodes = 100000;
 	int maxNodes = -1;
-	int maxLpSolved = 10;
+	int maxLpSolved = 1;
 	int maxSolutions = 1;
 
 	/* Strategies. */
 	RankerType ranker = RankerType::TYPE;
-	ValueChooserType valueChooser = ValueChooserType::RANDOM;
+	ValueChooserType valueChooser = ValueChooserType::RANDOM_LP;
 	LpAlgorithmType lpMethod = LpAlgorithmType::BARRIER;
 	LpAlgorithmType lpMethodFinal = LpAlgorithmType::BARRIER;
-	bool mipPresolve = true;
-	bool postsolve = false; /** Whether to postsolve found solutions. */
-	bool zeroObj = false; /** Whether to zero out the objective of the LP relaxation. */
+	bool mipPresolve = true; /** Whether to presolver the problem. */
+	bool postsolve = false;  /** Whether to postsolve found solutions. */
+	bool zeroObj = false;    /** Whether to zero out the objective of the LP relaxation. */
 
 	/* Solver settings. */
 	SolverType solver = SolverType::COPT;

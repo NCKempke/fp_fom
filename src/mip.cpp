@@ -360,7 +360,7 @@ void Params::readConfig()
 		error = true;
 	}
 
-	if (presolver != SolverType::GUROBI && postsolve)
+	if (presolver != SolverType::CPLEX && postsolve)
 	{
 		consoleError("Only CPLEX offers mip postsolve! Deactivating postsolve.");
 		postsolve = 0;
