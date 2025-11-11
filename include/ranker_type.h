@@ -15,8 +15,12 @@
 
 enum class RankerType
 {
+    LR,
     TYPE,
+    TYPECL,
     LOCKS,
+    CLIQUES,
+    CLIQUES2,
     RANDOM,
     REDCOSTS,
     DUALS,

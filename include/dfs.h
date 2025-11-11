@@ -16,6 +16,7 @@
 #include "mip.h"
 #include "tool_app.h"
 #include "propagation.h"
+#include "walkmip.h"
 
 #include <consolelog.h>
 #include <timer.h>
@@ -70,6 +71,8 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 	std::vector<Node> nodes;
 	std::vector<int> allIdx(n);
 	std::iota(allIdx.begin(), allIdx.end(), 0);
+
+	WalkMIP repair(data, params, engine);
 
 	// push root node
 	Domain::iterator start_mark = engine.mark();
@@ -135,6 +138,12 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 		// propagate & repair
 		if (params.propagate)
 			nodeInfeas = engine.propagate(false);
+
+		if (params.repair)
+		{
+			repair.walk();
+			nodeInfeas = (!engine.violatedRows().empty());
+		}
 
 		if (params.enableOutput && ((nodecnt % params.displayInterval) == 0))
 			consoleLog("{}: {} nodes processed: depth={} violation={} elapsed={}", strat_name,
@@ -211,7 +220,13 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 				}
 			}
 
-			if (data.nContinuous)
+			/* Apply 1-opt if feasible */
+			if (!nodeInfeas)
+			{
+				repair.oneOpt();
+				FP_ASSERT(engine.violatedRows().empty());
+			}
+			else if (data.nContinuous)
 			{
 				// The solution got infeasible when solving the LP for the continuous variables
 				// Hence, the engine does not yet have a complete solution. Make sure it does.

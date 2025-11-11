@@ -23,6 +23,7 @@
 #include <fileconfig.h>
 #include <path.h>
 #include <str_utils.h>
+#include <map>
 #include <mutex>
 #include <thread>
 #include <timer.h>
@@ -65,16 +66,63 @@ static void runDFS(WorkerDataPtr worker, Params params, int trial)
 
 	consoleLog("DFS {}-{} seed={}", toString(params.ranker), toString(params.valueChooser), params.seed);
 
-	StaticStrategy strategy{data};
-
 	// Create ranker and value chooser
 	RankerPtr ranker = makeRanker(params.ranker, params, data);
 	ValuePtr chooser = makeValueChooser(params.valueChooser, params, data);
 	FP_ASSERT(ranker);
 	FP_ASSERT(chooser);
-	strategy.setup(domain, ranker, chooser);
 
-	dfsSearch(worker, params, strategy);
+	// Use either old or new branching strategy.
+	std::unique_ptr<DFSStrategy> strategy;
+
+	if (params.useOldBranching)
+	{
+		strategy = std::make_unique<BranchSimple>(data);
+		dynamic_cast<BranchSimple &>(*strategy).setup(domain, ranker, chooser);
+	}
+	else
+	{
+		strategy = std::make_unique<BranchNew>(data);
+		dynamic_cast<BranchNew &>(*strategy).setup(domain, ranker, chooser);
+	}
+
+	Domain::iterator mark = engine.mark();
+	dfsSearch(worker, params, *strategy);
+
+	// final and longer repair if still infeasible
+	if (!pool.hasFeas() && pool.hasSols())
+	{
+		// load solution into engine
+		SolutionPtr sol = pool.getSols()[0];
+		FP_ASSERT(sol);
+		for (int j = 0; j < n; j++)
+			engine.fix(j, sol->x[j]);
+		double oldViol = engine.violation();
+		FP_ASSERT(oldViol > 0.0);
+
+		consoleLog("Final repair attempt");
+		params.maxRepairSteps *= 5;
+		WalkMIP repair(data, params, engine);
+		repair.walk();
+		double newViol = engine.violation();
+		consoleLog("Final repair outcome: viol {} -> {}", oldViol, newViol);
+
+		// add to pool if the new solution is 'better' w.r.t. to feasibility
+		if (newViol < oldViol)
+		{
+			std::vector<double> x{domain.lbs().begin(), domain.lbs().end()};
+			double objval = evalObj(mip, x);
+			bool isFeas = isSolFeasible(mip, x);
+			sol = makeFromSpan(mip, x, objval, isFeas, newViol);
+
+			sol->timeFound = gStopWatch().getElapsed();
+			const std::string strat_name = fmt::format("{}_{}", toString(params.ranker), toString(params.valueChooser));
+			sol->foundBy = strat_name;
+			pool.add(sol);
+		}
+	}
+
+	engine.undo(mark);
 }
 
 static void runSingleHeuristicParallel(

@@ -17,8 +17,12 @@
 #include "str_utils.h"
 
 const std::unordered_map<std::string, RankerType> rankerTypeMap = {
+    {"lr", RankerType::LR},
     {"type", RankerType::TYPE},
+    {"typecl", RankerType::TYPECL},
     {"locks", RankerType::LOCKS},
+    {"cliques", RankerType::CLIQUES},
+    {"cliquess", RankerType::CLIQUES2},
     {"random", RankerType::RANDOM},
     {"duals", RankerType::DUALS},
     {"redcosts", RankerType::REDCOSTS},
@@ -42,7 +46,7 @@ RankerType RankerTypeFromString(const std::string &str)
 
 bool rankerNeedsLpSolve(RankerType ranker)
 {
-    return (ranker == RankerType::REDCOSTS);
+    return (ranker == RankerType::REDCOSTS || ranker == RankerType::CLIQUES || ranker == RankerType::CLIQUES2);
 }
 
 /* Get string from RankerType. */
@@ -50,10 +54,18 @@ std::string toString(RankerType rankerType)
 {
     switch (rankerType)
     {
+    case RankerType::LR:
+        return "LR";
     case RankerType::TYPE:
         return "TYPE";
+    case RankerType::TYPECL:
+        return "TYPECL";
     case RankerType::LOCKS:
         return "LOCKS";
+    case RankerType::CLIQUES:
+        return "CLIQUES";
+    case RankerType::CLIQUES2:
+        return "CLIQUES2";
     case RankerType::RANDOM:
         return "RANDOM";
     case RankerType::REDCOSTS:
@@ -63,6 +75,7 @@ std::string toString(RankerType rankerType)
     case RankerType::FRAC:
         return "FRAC";
     default:
+    case RankerType::UNKNOWN:
         return "UNKNOWN";
     }
 }

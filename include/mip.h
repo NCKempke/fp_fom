@@ -20,6 +20,7 @@
 #include "solver_type.h"
 #include "ranker_type.h"
 #include "value_chooser_type.h"
+#include "preset_type.h"
 
 #include <maths.h>
 #include <mipmodel.h>
@@ -257,26 +258,37 @@ public:
 	double timeLimit = 1200;
 	int threads = 32;
 	int maxTries = 1;
+
 	/* Output. */
 	bool enableOutput = true;
 	int displayInterval = 500;
+
 	/* Depth-first-search parameters. */
 	bool propagate = true;
+	bool repair = false;
 	bool backtrackOnInfeas = true;
 	double maxConsecutiveInfeas = 0.2; /** node limit as fraction of variables */
+
 	int minNodes = 100000;
 	int maxNodes = -1;
 	int maxLpSolved = 1;
 	int maxSolutions = 1;
 
 	/* Strategies. */
+	PresetType preset = PresetType::UNKNOWN;
+	bool useOldBranching = false; /** Whether to use the old or the new branching strategy. */
 	RankerType ranker = RankerType::TYPE;
 	ValueChooserType valueChooser = ValueChooserType::RANDOM_LP;
 	LpAlgorithmType lpMethod = LpAlgorithmType::BARRIER;
 	LpAlgorithmType lpMethodFinal = LpAlgorithmType::BARRIER;
 	bool mipPresolve = true; /** Whether to presolver the problem. */
-	bool postsolve = false;  /** Whether to postsolve found solutions. */
-	bool zeroObj = false;    /** Whether to zero out the objective of the LP relaxation. */
+	bool postsolve = false;	 /** Whether to postsolve found solutions. */
+	bool zeroObj = false;	 /** Whether to zero out the objective of the LP relaxation. */
+
+	/* repair limits */
+	double randomWalkProbability = 0.75;
+	int maxRepairNonImprove = 10;
+	int maxRepairSteps = 100;
 
 	/* Solver settings. */
 	SolverType solver = SolverType::COPT;
@@ -286,8 +298,8 @@ public:
 	/* Whether to run all heuristics in parallel (after the LP solve). */
 	bool runPortfolio = false;
 
-	/* Private parameters */
-	bool solveLp = false;	/** Whether to solve the LP relaxation. */
+	/* Private parameters (derived from input). */
+	bool solveLp = false; /** Whether to solve the LP relaxation. */
 
 	void readConfig();
 	void logToConsole();

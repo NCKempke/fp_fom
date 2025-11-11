@@ -69,12 +69,14 @@ add_executable(fp_main
   src/linear_propagator.cpp
   src/lp_algorithm_type.cpp
   src/mip.cpp
+  src/preset_type.cpp
   src/propagation.cpp
   src/ranker_type.cpp
   src/solver_type.cpp
   src/table_propagators.cpp
   src/value_chooser_type.cpp
   src/vectorlist.cpp
+  src/walkmip.cpp
 )
 
 target_include_directories(fp_main PUBLIC

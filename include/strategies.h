@@ -30,12 +30,26 @@
 class Ranker
 {
 public:
-	Ranker(uint64_t _seed = 0) : seed{_seed} {}
-	virtual ~Ranker() {}
+	Ranker(uint64_t _seed = 0) : seed{_seed}, unif{0.0, 1.0} { rndgen.seed(seed); };
+	virtual ~Ranker() {};
 	virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) = 0;
 
 protected:
+	bool randBool()
+	{
+		return unif(rndgen) < 0.5;
+	}
+
+	double randZeroOne()
+	{
+		return unif(rndgen);
+	}
+
 	uint64_t seed;
+
+private:
+	std::mt19937_64 rndgen;
+	std::uniform_real_distribution<double> unif; /** Uniform 0-1 distribution. */
 };
 
 using RankerPtr = std::shared_ptr<Ranker>;
@@ -70,6 +84,27 @@ private:
 using ValuePtr = std::shared_ptr<ValueChooser>;
 
 /************* Rankers *************/
+
+/** Take integers and binaries as is from the problem. */
+class LR : public Ranker
+{
+public:
+	virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) override
+	{
+		FP_ASSERT(data.mip.ncols == (data.nBinaries + data.nIntegers + data.nContinuous));
+
+		std::vector<int> discreteVariables(data.mip.ncols - data.nContinuous);
+		int pos = 0;
+		for (int j = 0; j < data.mip.ncols; j++)
+		{
+			if (data.mip.xtype[j] == 'B' || data.mip.xtype[j] == 'I')
+				discreteVariables[pos++] = j;
+		}
+		FP_ASSERT(pos == static_cast<int>(discreteVariables.size()));
+		return discreteVariables;
+	}
+};
+
 class ByType : public Ranker
 {
 public:
@@ -242,32 +277,6 @@ public:
 	}
 };
 
-class ByIntegrality : public Ranker
-{
-public:
-	ByIntegrality(const std::vector<double> &_xref) : xref(_xref) {}
-	virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) override
-	{
-		FP_ASSERT(data.mip.ncols == (data.nBinaries + data.nIntegers + data.nContinuous));
-		FP_ASSERT(!xref.empty());
-		std::vector<int> sorted;
-		std::vector<double> score(data.mip.ncols);
-		for (int j = 0; j < data.mip.ncols; j++)
-		{
-			if (data.mip.xtype[j] == 'C')
-				continue;
-			score[j] = integralityViolation(xref[j]);
-			sorted.push_back(j);
-		}
-		std::sort(sorted.begin(), sorted.end(), [&](int v1, int v2)
-				  { return (score[v1] < score[v2]); });
-		return sorted;
-	}
-
-protected:
-	std::vector<double> xref;
-};
-
 class RandomOrder : public Ranker
 {
 public:
@@ -302,7 +311,7 @@ public:
 	{
 		// compute score
 		std::vector<int> score(data.mip.ncols);
-		int sentinel = -2 * data.mip.nRows;
+		int sentinel = 2 * data.mip.nRows;
 		for (int var = 0; var < data.mip.ncols; var++)
 		{
 			if (data.mip.xtype[var] == 'C')
@@ -313,15 +322,17 @@ public:
 			}
 			// both bounds are finite
 			score[var] = data.uplocks[var];
-			// if (data.uplocks[var] > data.dnlocks[var])  score[var] = -data.dnlocks[var];
-			// else                                        score[var] = -data.uplocks[var];
+			if (data.uplocks[var] > data.dnlocks[var])
+				score[var] = -data.dnlocks[var];
+			else
+				score[var] = -data.uplocks[var];
 		}
 
 		// sort by increasing score
 		std::vector<int> sorted(data.mip.ncols);
 		std::iota(sorted.begin(), sorted.end(), 0);
 		std::sort(sorted.begin(), sorted.end(), [&](int v1, int v2)
-				  { return (score[v1] > score[v2]); });
+				  { return (score[v1] < score[v2]); });
 
 		// drop continuous if any
 		if (data.nContinuous)
@@ -332,7 +343,218 @@ public:
 			sorted.erase(sorted.begin() + start, sorted.end());
 		}
 
-		// TODO: randomize within same score?
+		return sorted;
+	}
+};
+
+class ByTypeCl : public Ranker
+{
+public:
+	virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) override
+	{
+		/* Add all variables w.r.t. their clique cover. Then place integers. */
+		FP_ASSERT(data.mip.ncols == (data.nBinaries + data.nIntegers + data.nContinuous));
+		// bucket sort by type
+		std::vector<int> sorted(data.mip.ncols - data.nContinuous);
+		std::vector<bool> added(data.mip.ncols);
+
+		int startBin = 0;
+		int startInt = startBin + data.nBinaries;
+
+		/* Iterate the clique-cover and put all covered binaries. Then, put the uncovered binaries. */
+		for (int cl = 0; cl < data.cliquecover.nCliques(); cl++)
+		{
+			std::vector<int> vars;
+			std::vector<double> weights;
+			for (int lit : data.cliquecover.getClique(cl))
+			{
+				const auto [j, isPos] = varFromLit(lit, data.mip.ncols);
+
+				if (!added[j])
+				{
+					added[j] = true;
+					sorted[startBin++] = j;
+				}
+			}
+		}
+
+		/* Put uncovered binaries. Simultaneously, put integers last. */
+		for (int j = 0; j < data.mip.ncols; j++)
+		{
+			if ((domain.type(j) == 'B') && !added[j])
+			{
+				added[j] = true;
+				sorted[startBin++] = j;
+			}
+			if (data.mip.xtype[j] == 'I')
+			{
+				added[j] = true;
+				sorted[startInt++] = j;
+			}
+		}
+		FP_ASSERT(startBin == data.nBinaries);
+		FP_ASSERT(startInt == (data.nBinaries + data.nIntegers));
+
+		return sorted;
+	}
+};
+
+class ByCliques : public Ranker
+{
+public:
+	ByCliques(uint64_t seed) : Ranker{seed} {}
+	virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) override
+	{
+		std::vector<int> sorted;
+		std::vector<bool> added(data.mip.ncols, false);
+
+		for (int cl = 0; cl < data.cliquecover.nCliques(); cl++)
+		{
+			std::vector<int> vars;
+			std::vector<double> weights;
+			for (int lit : data.cliquecover.getClique(cl))
+			{
+				const auto [j, isPos] = varFromLit(lit, data.mip.ncols);
+
+				if (equal(domain.lb(j), domain.ub(j)))
+					continue;
+
+				vars.push_back(j);
+
+				if (isPos)
+					weights.push_back(data.primals[j]);
+				else
+					weights.push_back(1.0 - data.primals[j]);
+			}
+
+			for (size_t inz = 0; inz < weights.size(); ++inz)
+			{
+				weights[inz] = std::log(randZeroOne() / weights[inz]);
+			}
+
+			// Create an index array to sort by weights
+			std::vector<size_t> order(weights.size());
+			std::iota(order.begin(), order.end(), 0);
+
+			// Sort the indices based on corresponding weights (non-decreasing)
+			std::sort(order.begin(), order.end(),
+					  [&](size_t a, size_t b)
+					  { return weights[a] < weights[b]; });
+
+			// Reorder vars accordingly (no need to reorder weights)
+			std::vector<int> sorted_vars(vars.size());
+			for (size_t i = 0; i < order.size(); ++i)
+				sorted_vars[i] = vars[order[i]];
+
+			// add them to sorted list
+			for (auto j : sorted)
+			{
+				if (!added[j])
+				{
+					added[j] = true;
+					sorted.push_back(j);
+				}
+			}
+		}
+
+		for (int j = 0; j < data.mip.ncols; j++)
+		{
+			if ((domain.type(j) != 'C') && !added[j])
+				sorted.push_back(j);
+		}
+
+		assert(static_cast<int>(sorted.size()) == data.mip.ncols - data.nContinuous);
+
+		return sorted;
+	}
+};
+
+class ByCliques2 : public Ranker
+{
+public:
+	ByCliques2(uint64_t seed) : Ranker{seed} {}
+	virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) override
+	{
+		std::vector<int> sorted;
+		std::vector<bool> added(data.mip.ncols, false);
+
+		for (int cl = 0; cl < data.cliquetable.nCliques(); cl++)
+		{
+			double bestValue = 0.0;
+			double sum = 0.0;
+			int bestVar = -1;
+			bool skip_clique = false;
+
+			for (int lit : data.cliquetable.getClique(cl))
+			{
+				const auto [j, isPos] = varFromLit(lit, data.mip.ncols);
+
+				if (isPos)
+				{
+					if (equal(domain.lb(j), 1.0))
+					{
+						skip_clique = true;
+						break;
+					}
+
+					const double v = data.primals[j];
+					sum += v;
+
+					if (v > bestValue && equal(domain.ub(j), 1.0))
+					{
+						bestVar = j;
+						bestValue = v;
+					}
+				}
+				else
+				{
+					if (equal(domain.ub(j), 0.0))
+					{
+						skip_clique = true;
+						break;
+					}
+
+					const double v = (1.0 - data.primals[j]);
+					sum += v;
+
+					if (v > bestValue && equal(domain.lb(j), 0.0))
+					{
+						bestVar = j;
+						bestValue = v;
+					}
+				}
+			}
+
+			if (!skip_clique && bestVar != -1 && equal(sum, 1.0))
+			{
+				if (!added[bestVar])
+				{
+					sorted.push_back(bestVar);
+					added[bestVar] = true;
+				}
+
+				for (int lit : data.cliquetable.getClique(cl))
+				{
+					const auto [j, isPos] = varFromLit(lit, data.mip.ncols);
+
+					/* This check also skips bestVar. */
+					if (!added[j])
+					{
+						sorted.push_back(j);
+						added[j] = true;
+					}
+				}
+			}
+		}
+
+		for (int j = 0; j < data.mip.ncols; j++)
+		{
+			if ((domain.type(j) != 'C') && !added[j])
+				sorted.push_back(j);
+		}
+
+		assert(static_cast<int>(sorted.size()) == data.mip.ncols - data.nContinuous);
+
 		return sorted;
 	}
 };
@@ -415,7 +637,6 @@ class Split : public ValueChooser
 public:
 	virtual double operator()(const MIPData &data, const Domain &domain, int var) override
 	{
-		// std::cout << var << " has bounds [" << domain.lb(var) << ", " << domain.ub(var) << "]\n";
 		return std::floor((domain.ub(var) + domain.lb(var)) / 2.0);
 	}
 };
@@ -427,12 +648,7 @@ public:
 
 	virtual double operator()(const MIPData &data, const Domain &domain, int var) override
 	{
-		std::srand(static_cast<unsigned int>(std::time(nullptr)));
-
-		// Generate a random bool by taking the modulus of 2
-		bool randomBool = std::rand() % 3;
-
-		if (randomBool)
+		if (randBool())
 		{
 			return domain.lb(var);
 		}
@@ -511,10 +727,67 @@ protected:
 	const std::vector<double> &xref;
 };
 
-class StaticStrategy : public DFSStrategy
+class BranchSimple : public DFSStrategy
 {
 public:
-	StaticStrategy(const MIPData &_data) : data(_data) {}
+	BranchSimple(const MIPData &_data) : data(_data) {}
+	void setup(const Domain &domain, RankerPtr ranker, ValuePtr _chooser)
+	{
+		chooser = _chooser;
+		FP_ASSERT(data.mip.ncols == (data.nBinaries + data.nIntegers + data.nContinuous));
+		sorted = (*ranker)(data, domain);
+		FP_ASSERT(sorted.size() == (int)(data.mip.ncols - data.nContinuous));
+		// compute inverse map
+		invmap.resize(data.mip.ncols);
+		std::fill(invmap.begin(), invmap.end(), -1);
+		for (int idx = 0; idx < (int)sorted.size(); idx++)
+			invmap[sorted[idx]] = idx;
+	}
+
+	std::vector<Branch> branch(const Domain &domain, bool nodeInfeas, const Branch &oldBranch) override
+	{
+		int startPos = (oldBranch.index >= 0) ? invmap[oldBranch.index] : 0;
+		FP_ASSERT(startPos != -1);
+
+		// Branch according to order
+		for (int idx = startPos; idx < (int)sorted.size(); idx++)
+		{
+			int var = sorted[idx];
+			FP_ASSERT(data.mip.xtype[var] != 'C');
+			if (equal(domain.lb(var), domain.ub(var)))
+				continue;
+
+			/* Choose a preferred value */
+			double lb = domain.lb(var);
+			double ub = domain.ub(var);
+			double value = (*chooser)(data, domain, var);
+			if (equal(value, lb))
+			{
+				Branch preferred{var, 'U', domain.lb(var)};
+				Branch other{var, 'L', domain.ub(var)};
+				return {preferred, other};
+			}
+			else
+			{
+				Branch preferred{var, 'L', domain.ub(var)};
+				Branch other{var, 'U', domain.lb(var)};
+				return {preferred, other};
+			}
+		}
+		return {};
+	}
+
+private:
+	const MIPData &data;
+	ValuePtr chooser;
+	std::vector<int> sorted;
+	std::vector<int> invmap;
+};
+
+class BranchNew : public DFSStrategy
+{
+public:
+	BranchNew(const MIPData &_data) : data(_data) {}
 	void setup(const Domain &domain, RankerPtr ranker, ValuePtr _chooser)
 	{
 		chooser = _chooser;
@@ -605,21 +878,31 @@ RankerPtr makeRanker(RankerType ranker, const Params &params, const MIPData &dat
 {
 	switch (ranker)
 	{
+	case RankerType::LR:
+		return RankerPtr{new LR()};
+	case RankerType::TYPE:
+		return RankerPtr{new ByType()};
+	case RankerType::TYPECL:
+		return RankerPtr{new ByTypeCl()};
 	case RankerType::LOCKS:
 		return RankerPtr{new Locks()};
+	case RankerType::CLIQUES:
+		return RankerPtr{new ByCliques(params.seed)};
+	case RankerType::CLIQUES2:
+		return RankerPtr{new ByCliques2(params.seed)};
 	case RankerType::RANDOM:
 		return RankerPtr{new RandomOrder(params.seed)};
 	case RankerType::REDCOSTS:
 		return RankerPtr{new ByReducedCosts(params.seed)};
-	case RankerType::TYPE:
-		return RankerPtr{new ByType()};
 	case RankerType::DUALS:
 		return RankerPtr{new ByDuals()};
 	case RankerType::FRAC:
 		return RankerPtr{new ByFrac()};
 	default:
+	case RankerType::UNKNOWN:
 		FP_ASSERT(false);
-		return RankerPtr{};
+		consoleError("Ranker UNKNOWN");
+		exit(1);
 	}
 }
 
@@ -627,28 +910,30 @@ ValuePtr makeValueChooser(ValueChooserType value_chooser, const Params &params, 
 {
 	switch (value_chooser)
 	{
-	case ValueChooserType::BAD_OBJ:
-		return ValuePtr{new BadObj()};
-	case ValueChooserType::DOWN:
-		return ValuePtr{new AlwaysDown()};
 	case ValueChooserType::GOOD_OBJ:
 		return ValuePtr{new GoodObj()};
-	case ValueChooserType::LOOSE:
-		return ValuePtr{new Loose()};
+	case ValueChooserType::BAD_OBJ:
+		return ValuePtr{new BadObj()};
 	case ValueChooserType::RANDOM:
 		return ValuePtr{new RandomValue(params.seed)};
+	case ValueChooserType::LOOSE:
+		return ValuePtr{new Loose()};
 	case ValueChooserType::RANDOM_LP:
 		return ValuePtr{new RandomRelaxation(params.seed, data.primals)};
+	case ValueChooserType::UP:
+		return ValuePtr{new AlwaysUp()};
+	case ValueChooserType::DOWN:
+		return ValuePtr{new AlwaysDown()};
 	case ValueChooserType::RANDOM_UP_DOWN:
 		return ValuePtr{new RandomUpDown(params.seed)};
 	case ValueChooserType::ROUND_INT:
 		return ValuePtr{new RoundInt(data.primals)};
 	case ValueChooserType::SPLIT:
 		return ValuePtr{new Split()};
-	case ValueChooserType::UP:
-		return ValuePtr{new AlwaysUp()};
 	default:
+	case ValueChooserType::UNKNOWN:
 		FP_ASSERT(false);
-		return ValuePtr{};
+		consoleError("ValueChooser UNKNOWN");
+		exit(1);
 	}
 }

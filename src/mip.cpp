@@ -279,6 +279,7 @@ void Params::readConfig()
 	READ_ASSIGN_PARAM(displayInterval);
 
 	READ_ASSIGN_PARAM(propagate);
+	READ_ASSIGN_PARAM(repair);
 	READ_ASSIGN_PARAM(backtrackOnInfeas);
 	READ_ASSIGN_PARAM(maxConsecutiveInfeas);
 
@@ -290,11 +291,16 @@ void Params::readConfig()
 	READ_ASSIGN_PARAM(mipPresolve);
 	READ_ASSIGN_PARAM(postsolve);
 	READ_ASSIGN_PARAM(zeroObj);
+	READ_ASSIGN_PARAM(randomWalkProbability);
+	READ_ASSIGN_PARAM(maxRepairNonImprove);
+	READ_ASSIGN_PARAM(maxRepairSteps);
 	READ_ASSIGN_PARAM(lpTol);
 
 	READ_ASSIGN_PARAM(runPortfolio);
 
 	/* Read solver and strategy info. */
+	READ_ASSIGN_PARAM(useOldBranching);
+	std::string presetConfig = READ_PARAM(preset);
 	std::string solverConfig = READ_PARAM(solver);
 	std::string presolverConfig = READ_PARAM(presolver);
 	std::string lpMethodConfig = READ_PARAM(lpMethod);
@@ -302,15 +308,59 @@ void Params::readConfig()
 	std::string rankerConfig = READ_PARAM(ranker);
 	std::string valueChooserConfig = READ_PARAM(valueChooser);
 
-	valueChooser = valueChooserConfig.empty() ? defaults.valueChooser : ValueChooserTypeFromString(valueChooserConfig);
-	ranker = rankerConfig.empty() ? defaults.ranker : RankerTypeFromString(rankerConfig);
+	preset = presetConfig.empty() ? defaults.preset : PresetTypeFromString(presetConfig);
 	lpMethod = lpMethodConfig.empty() ? defaults.lpMethod : LpAlgorithmTypeFromString(lpMethodConfig);
+
+	if (preset != PresetType::UNKNOWN)
+	{
+		const auto [rankerPreset, chooserPreset] = getRankerAndValueChooserFromPreset(preset);
+		consoleLog("Preset={}; overwriting potentially specified ranker and valueChooser:", toString(preset));
+		consoleLog("\tranker={} valueChooser={}", toString(rankerPreset), toString(chooserPreset));
+
+		ranker = rankerPreset;
+		valueChooser = chooserPreset;
+
+		if (preset == PresetType::ZEROCORE)
+		{
+			consoleLog("\tlpSolver={}, zeroObj=true\n", toString(LpAlgorithmType::DUAL_SIMPLEX));
+			lpMethod = LpAlgorithmType::DUAL_SIMPLEX;
+			zeroObj = true;
+		}
+		else if (preset == PresetType::ZEROLP)
+		{
+			consoleLog("\tzeroObj=true\n");
+			zeroObj = true;
+		}
+		else if (preset == PresetType::CORE)
+		{
+			consoleLog("\tlpSolver={}\n", toString(LpAlgorithmType::BARRIER));
+			lpMethod = LpAlgorithmType::BARRIER;
+		}
+		else if (preset == PresetType::LP)
+		{
+			consoleLog("\tlpSolver={}\n", toString(LpAlgorithmType::DUAL_SIMPLEX));
+			lpMethod = LpAlgorithmType::DUAL_SIMPLEX;
+		}
+	}
+	else
+	{
+		valueChooser = valueChooserConfig.empty() ? defaults.valueChooser : ValueChooserTypeFromString(valueChooserConfig);
+		ranker = rankerConfig.empty() ? defaults.ranker : RankerTypeFromString(rankerConfig);
+	}
+
 	lpMethodFinal = lpMethodFinalConfig.empty() ? defaults.lpMethodFinal : LpAlgorithmTypeFromString(lpMethodFinalConfig);
 
 	solver = solverConfig.empty() ? defaults.solver : SolverTypeFromString(solverConfig);
 	presolver = presolverConfig.empty() ? defaults.presolver : SolverTypeFromString(presolverConfig);
 
 	solveLp = rankerNeedsLpSolve(ranker) || valueChooserNeedsLpSolve(valueChooser) || runPortfolio;
+
+	if (!presetConfig.empty() && preset == PresetType::UNKNOWN)
+	{
+		consoleError("Unknown preset {}; aborting", presetConfig);
+		printPresets();
+		error = true;
+	}
 
 	if (ranker == RankerType::UNKNOWN)
 	{
@@ -392,6 +442,7 @@ void Params::printUsage()
 	LOG_PARAM_DEFAULT(displayInterval);
 
 	LOG_PARAM_DEFAULT(propagate);
+	LOG_PARAM_DEFAULT(repair);
 	LOG_PARAM_DEFAULT(backtrackOnInfeas);
 	LOG_PARAM_DEFAULT(maxConsecutiveInfeas);
 
@@ -400,6 +451,8 @@ void Params::printUsage()
 	LOG_PARAM_DEFAULT(maxLpSolved);
 	LOG_PARAM_DEFAULT(maxSolutions);
 
+	LOG_PARAM_DEFAULT(useOldBranching);
+	consoleLog("preset={}", toString(preset));
 	consoleLog("ranker={}", toString(ranker));
 	consoleLog("valueChooser={}", toString(valueChooser));
 	consoleLog("lpMethod={}", toString(lpMethod));
@@ -407,6 +460,9 @@ void Params::printUsage()
 	LOG_PARAM_DEFAULT(mipPresolve);
 	LOG_PARAM_DEFAULT(postsolve);
 	LOG_PARAM_DEFAULT(zeroObj);
+	LOG_PARAM_DEFAULT(randomWalkProbability);
+	LOG_PARAM_DEFAULT(maxRepairNonImprove);
+	LOG_PARAM_DEFAULT(maxRepairSteps);
 
 	consoleLog("solver={}", toString(solver));
 	consoleLog("presolver={}", toString(presolver));
@@ -447,6 +503,7 @@ void Params::logToConsole()
 	LOG_PARAM(displayInterval);
 
 	LOG_PARAM(propagate);
+	LOG_PARAM(repair);
 	LOG_PARAM(backtrackOnInfeas);
 	LOG_PARAM(maxConsecutiveInfeas);
 
@@ -455,12 +512,17 @@ void Params::logToConsole()
 	LOG_PARAM(maxLpSolved);
 	LOG_PARAM(maxSolutions);
 
+	LOG_PARAM(useOldBranching);
+	consoleLog("preset={}", toString(preset));
 	consoleLog("ranker = {}", toString(ranker));
 	consoleLog("valueChooser = {}", toString(valueChooser));
 	consoleLog("lpMethod = {}", toString(lpMethod));
 	consoleLog("lpMethodFinal = {}", toString(lpMethodFinal));
 	LOG_PARAM(mipPresolve);
 	LOG_PARAM(postsolve);
+	LOG_PARAM(randomWalkProbability);
+	LOG_PARAM(maxRepairNonImprove);
+	LOG_PARAM(maxRepairSteps);
 	LOG_PARAM(zeroObj);
 
 	consoleLog("solver = {}", toString(solver));
