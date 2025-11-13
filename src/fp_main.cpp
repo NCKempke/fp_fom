@@ -264,13 +264,13 @@ protected:
 	MIPModelPtr presolve(MIPModelPtr model)
 	{
 		/* Presolve the model. */
-		gStopWatch().start();
 		model->presolve();
 		MIPModelPtr premodel = model->presolvedModel();
-		gStopWatch().stop();
 
 		consoleLog("Presolved Problem: #rows={} #cols={} #nnz={}", premodel->nrows(), premodel->ncols(), premodel->nnz());
+		gStopWatch().stop();
 		consoleInfo("Presolve time = {}", gStopWatch().getPartial());
+		gStopWatch().start();
 
 		/* convert the model to another solver IFF solver != presolver; this will get rid of the currently stored premodel. */
 		if (params.solver != params.presolver)
@@ -414,6 +414,8 @@ protected:
 
 	void exec()
 	{
+		gStopWatch().start();
+
 		// read params
 		params.readConfig();
 
@@ -440,13 +442,14 @@ protected:
 
 		/* Read the model. */
 		consoleLog("Reading the problem.");
-		gStopWatch().start();
 
 		/* Actually read the problem. */
 		model->readModel(args.input[0]);
 
 		gStopWatch().stop();
 		auto reading_time = gStopWatch().getPartial();
+		gStopWatch().start();
+
 		consoleInfo("Reading time = {}", reading_time);
 		consoleLog("");
 
@@ -478,7 +481,6 @@ protected:
 		/* Initialize the presolved MIP data. */
 		MIPData data(premodel);
 
-		gStopWatch().start();
 		FP_ASSERT(premodel);
 		consoleLog("");
 
@@ -501,7 +503,9 @@ protected:
 		if (params.solveLp)
 			solve_initial_lp(data);
 
+		gStopWatch().stop();
 		consoleInfo("LP time = {}", gStopWatch().getPartial());
+		gStopWatch().start();
 
 		if (params.runPortfolio)
 		{
@@ -538,6 +542,8 @@ protected:
 			consoleLog("minAbsViol = {}", data.solpool.minViolation());
 		else
 			consoleLog("minAbsViol = {}", 1000000.0);
+
+		gStopWatch().stop();
 		consoleLog("time = {}", gStopWatch().getElapsed());
 	}
 };
