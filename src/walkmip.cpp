@@ -118,7 +118,6 @@ void WalkMIP::walk()
 	const auto &sense = data.mip.sense;
 	const Domain &domain = engine.getDomain();
 
-	printf("walking\n");
 	// init best
 	const IndexSet<int> &violated = engine.violatedRows();
 	double bestViol = engine.violation();
