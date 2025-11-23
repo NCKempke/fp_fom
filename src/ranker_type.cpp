@@ -49,6 +49,11 @@ bool rankerNeedsLpSolve(RankerType ranker)
     return (ranker == RankerType::REDCOSTS || ranker == RankerType::CLIQUES || ranker == RankerType::CLIQUES2);
 }
 
+bool rankerNeedsCliqueCover(RankerType ranker)
+{
+    return (ranker == RankerType::TYPECL || ranker == RankerType::CLIQUES);
+}
+
 /* Get string from RankerType. */
 std::string toString(RankerType rankerType)
 {

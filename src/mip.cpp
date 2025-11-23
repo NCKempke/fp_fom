@@ -870,6 +870,21 @@ void constructImpltable(MIPData &data)
 	consoleLog("Impltable: {} implications", data.impltable.nImpls());
 }
 
+// Construct a cliquecover over the binary variables
+void constructCliqueCover(MIPData &data)
+{
+	// clique covers
+	std::vector<int> binaries;
+	for (int j = 0; j < data.mip.ncols; j++)
+	{
+		if (data.mip.xtype[j] == 'B')
+			binaries.push_back(j);
+	}
+	data.cliquecover = greedyCliqueCover(data.cliquetable, binaries, false);
+
+	consoleLog("Clique cover: {} cliques, {} / {}", data.cliquecover.nCliques(), data.cliquecover.nCovered(), binaries.size());
+}
+
 std::vector<double> solveLP(MIPModelPtr model, const Params &params, bool enableOutput)
 {
 	std::vector<double> x;
@@ -895,7 +910,7 @@ std::vector<double> solveLP(MIPModelPtr model, const Params &params, bool enable
 }
 
 // Init MIP Data from a MIP model
-MIPData::MIPData(MIPModelPtr model)
+MIPData::MIPData(MIPModelPtr model, bool build_clique_cover)
 {
 	mip = extract(model);
 	solpool.setObjSense(mip.objSense);
@@ -914,4 +929,7 @@ MIPData::MIPData(MIPModelPtr model)
 	// global tables
 	constructCliquetable(*this);
 	constructImpltable(*this);
+
+	if (build_clique_cover)
+		constructCliqueCover(*this);
 }

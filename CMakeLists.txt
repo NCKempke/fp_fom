@@ -64,6 +64,7 @@ message("   Xpress directory: ${XPRESSDIR}")
 # Define fp_main executable
 add_executable(fp_main
   src/fp_main.cpp
+  src/cliquecover.cpp
   src/cliquetable.cpp
   src/impltable.cpp
   src/linear_propagator.cpp

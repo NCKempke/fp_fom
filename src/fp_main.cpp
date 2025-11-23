@@ -479,7 +479,8 @@ protected:
 		}
 
 		/* Initialize the presolved MIP data. */
-		MIPData data(premodel);
+		const bool construct_cliquecover = rankerNeedsCliqueCover(params.ranker);
+		MIPData data(premodel, construct_cliquecover);
 
 		FP_ASSERT(premodel);
 		consoleLog("");

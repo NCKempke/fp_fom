@@ -309,7 +309,7 @@ public:
 /* Global data structures on a MIP instance */
 struct MIPData
 {
-	MIPData(MIPModelPtr model);
+	MIPData(MIPModelPtr model, bool build_clique_cover);
 	// MIP instance
 	MIPInstance mip;
 	// global structures

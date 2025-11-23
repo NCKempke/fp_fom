@@ -34,6 +34,9 @@ RankerType RankerTypeFromString(const std::string &str);
 /* Whether a certain ranker needs to solve an LP to function. */
 bool rankerNeedsLpSolve(RankerType ranker);
 
+/* Whether a certain ranker needs a clique cover. */
+bool rankerNeedsCliqueCover(RankerType ranker);
+
 /* Get string from RankerType. */
 std::string toString(RankerType rankerType);
 
