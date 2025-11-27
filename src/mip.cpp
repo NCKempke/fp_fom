@@ -322,22 +322,27 @@ void Params::readConfig()
 
 		if (preset == PresetType::ZEROCORE)
 		{
-			consoleLog("\tlpSolver={}, zeroObj=true\n", toString(LpAlgorithmType::DUAL_SIMPLEX));
-			lpMethod = LpAlgorithmType::DUAL_SIMPLEX;
+			/* Barrier zero obj */
+			consoleLog("\tlpSolver={}, zeroObj=true\n", toString(LpAlgorithmType::BARRIER));
+			lpMethod = LpAlgorithmType::BARRIER;
 			zeroObj = true;
 		}
 		else if (preset == PresetType::ZEROLP)
 		{
-			consoleLog("\tzeroObj=true\n");
+			/* Simplex zero obj */
+			consoleLog("\tlpSolver={}, zeroObj=true\n", toString(LpAlgorithmType::DUAL_SIMPLEX));
+			lpMethod = LpAlgorithmType::DUAL_SIMPLEX;
 			zeroObj = true;
 		}
 		else if (preset == PresetType::CORE)
 		{
+			/* Barrier */
 			consoleLog("\tlpSolver={}\n", toString(LpAlgorithmType::BARRIER));
 			lpMethod = LpAlgorithmType::BARRIER;
 		}
 		else if (preset == PresetType::LP)
 		{
+			/* Simplex */
 			consoleLog("\tlpSolver={}\n", toString(LpAlgorithmType::DUAL_SIMPLEX));
 			lpMethod = LpAlgorithmType::DUAL_SIMPLEX;
 		}
