@@ -113,6 +113,7 @@ void WalkMIP::evalShift(int var, double delta, int pickedRow, bool &isCand, doub
 
 void WalkMIP::walk()
 {
+	++n_walk;
 	int n = data.mip.ncols;
 	int m = data.mip.nRows;
 	const auto &sense = data.mip.sense;

@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <random>
 
+#include "consolelog.h"
 #include "mip.h"
 #include "propagation.h"
 
@@ -27,7 +28,13 @@ public:
 	void walk();
 	void oneOpt();
 
+	~WalkMIP()
+	{
+		consoleLog("Walked {} times", n_walk);
+	}
+
 private:
+	int n_walk{};
 	// data
 	const MIPData &data;
 	const Params &params;
