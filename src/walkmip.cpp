@@ -315,7 +315,7 @@ void WalkMIP::walk()
 			break;
 		if (nSoftRestarts >= 500)
 			break;
-		if (gStopWatch().getElapsed() >= params.timeLimit)
+		if (gStopWatch().elapsed() >= params.timeLimit)
 			break;
 	}
 

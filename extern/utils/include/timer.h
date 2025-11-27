@@ -3,10 +3,12 @@
  * @brief CPU Stopwatch for benchmarks
  *
  * @author Domenico Salvagnin <dominiqs at gmail dot com>
+ * @contributor Nils-Christian Kempke  <nilskempke at gmail dot com>
  *
- * @date 2019
+ * @date 2019 - 2025
  *
  * Copyright 2019 Domenico Salvagnin
+ * Copyright 2025 Nils-Christian Kempke
  */
 #pragma once
 
@@ -22,64 +24,37 @@
 class StopWatch
 {
 public:
-	/** default constructor */
-	StopWatch(bool autoStart = false);
-	/** start stopwatch */
-	void start();
-	/** stop stopwatch */
-	void stop();
-	/** reset stopwatch */
-	void reset();
+	/** default constructor; stopwatch starts immediately */
+	StopWatch();
 
-	/** @return partial elapsed time in seconds */
-	double getPartial() const;
-	/** @return total elapsed time in seconds */
-	double getTotal() const;
-	/** @return elapsed time in seconds */
-	double getElapsed() const;
+	/** restart the lap-timer and return the elapsed lap (diff to either creation or last call to lap) */
+	double lap();
+
+	/** stop the stopwatch and return the elapsed time */
+	double elapsed() const;
 
 private:
-	std::chrono::high_resolution_clock::time_point w_begin;
-	std::chrono::high_resolution_clock::time_point w_end;
-	double w_total;
+	const std::chrono::high_resolution_clock::time_point stopwatch_begin;
+	std::chrono::high_resolution_clock::time_point lap_start;
 };
 
-inline StopWatch::StopWatch(bool autoStart) : w_total(0.0)
+inline StopWatch::StopWatch() : stopwatch_begin(std::chrono::high_resolution_clock::now()), lap_start{stopwatch_begin}
 {
-	if (autoStart)
-		start();
 }
 
-inline void StopWatch::start()
+inline double StopWatch::lap()
 {
-	w_begin = std::chrono::high_resolution_clock::now();
+	auto now = std::chrono::high_resolution_clock::now();
+	auto old_lap = lap_start;
+	lap_start = now;
+
+	return std::chrono::duration<double>(now - old_lap).count();
 }
 
-inline void StopWatch::stop()
+inline double StopWatch::elapsed() const
 {
-	w_end = std::chrono::high_resolution_clock::now();
-	w_total += getPartial();
-}
-
-inline void StopWatch::reset()
-{
-	w_total = 0.0;
-}
-
-inline double StopWatch::getPartial() const
-{
-	return std::chrono::duration<double>(w_end - w_begin).count();
-}
-
-inline double StopWatch::getTotal() const
-{
-	return w_total;
-}
-
-inline double StopWatch::getElapsed() const
-{
-	auto w_now = std::chrono::high_resolution_clock::now();
-	return std::chrono::duration<double>(w_now - w_begin).count();
+	auto now = std::chrono::high_resolution_clock::now();
+	return std::chrono::duration<double>(now - stopwatch_begin).count();
 }
 
 /**
@@ -87,55 +62,6 @@ inline double StopWatch::getElapsed() const
  */
 
 StopWatch &gStopWatch();
-
-/**
- * Automatic stopwatch stopper (RAII principle)
- */
-
-class AutoStopWatch
-{
-public:
-	AutoStopWatch(StopWatch *c) : theStopWatch(c), pending(true)
-	{
-		FP_ASSERT(theStopWatch);
-		theStopWatch->start();
-	}
-	~AutoStopWatch() { stop(); }
-	void stop()
-	{
-		if (pending)
-		{
-			theStopWatch->stop();
-			pending = false;
-		}
-	}
-
-private:
-	StopWatch *theStopWatch;
-	bool pending;
-};
-
-/**
- * Automatic global stopwatch stopper (RAII principle)
- */
-
-class GlobalAutoStopWatch
-{
-public:
-	GlobalAutoStopWatch() : pending(true) { gStopWatch().start(); }
-	~GlobalAutoStopWatch() { stop(); }
-	void stop()
-	{
-		if (pending)
-		{
-			gStopWatch().stop();
-			pending = false;
-		}
-	}
-
-private:
-	bool pending;
-};
 
 /**
  * Get current date/time as std::string, format is YYYY-MM-DD.HH:mm:ss

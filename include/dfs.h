@@ -147,7 +147,7 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 
 		if (params.enableOutput && ((nodecnt % params.displayInterval) == 0))
 			consoleLog("{}: {} nodes processed: depth={} violation={} elapsed={}", strat_name,
-					   nodecnt, node.depth, engine.violation(), gStopWatch().getElapsed());
+					   nodecnt, node.depth, engine.violation(), gStopWatch().elapsed());
 
 		if (!engine.violatedRows().empty())
 		{
@@ -167,7 +167,7 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 		if (branches.empty())
 		{
 			consoleLog("{}: {} nodes processed: depth={} violation={} elapsed={}", strat_name,
-					   nodecnt, node.depth, engine.violation(), gStopWatch().getElapsed());
+					   nodecnt, node.depth, engine.violation(), gStopWatch().elapsed());
 
 			/* End of dive */
 
@@ -180,14 +180,16 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 				lp->ubs(allIdx.size(), allIdx.data(), domain.ubs().data());
 
 				// solve LP
-				consoleLog("{}: Time starting LP solve = {}", strat_name, gStopWatch().getElapsed());
+				consoleLog("{}: Time starting LP solve = {}", strat_name, gStopWatch().elapsed());
 				lp->intParam(IntParam::Threads, params.threads);
 				lp->logging(params.enableOutput);
-				lp->dblParam(DblParam::TimeLimit, std::max(params.timeLimit - gStopWatch().getElapsed(), 0.0));
+				lp->dblParam(DblParam::TimeLimit, std::max(params.timeLimit - gStopWatch().elapsed(), 0.0));
 
+				gStopWatch().lap();
 				/* This should be solved with higher precision. We should always use 1e-6. Maybe even 1e-8? */
 				lp->lpopt(solverChar(params.lpMethodFinal), 1e-6);
-				consoleLog("{}: Time finished LP solve = {}", strat_name, gStopWatch().getElapsed());
+				consoleLog("{}: Time finished LP solve = {}", strat_name, gStopWatch().elapsed());
+				consoleLog("{}: LP time = {}", strat_name, gStopWatch().lap());
 				lpSolved++;
 
 				if (lp->isPrimalFeas())
@@ -245,7 +247,7 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 			double objval = evalObj(mip, x);
 			bool isFeas = isSolFeasible(mip, x);
 			SolutionPtr sol = makeFromSpan(mip, x, objval, isFeas, engine.violation());
-			sol->timeFound = gStopWatch().getElapsed();
+			sol->timeFound = gStopWatch().elapsed();
 			sol->foundBy = strat_name;
 
 			pool.add(sol);
@@ -267,7 +269,7 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 			(lpSolved >= params.maxLpSolved) ||
 			(numSolutions >= params.maxSolutions) ||
 			(consecutiveInfeas >= maxConsecutiveInfeas) ||
-			(gStopWatch().getElapsed() >= params.timeLimit) ||
+			(gStopWatch().elapsed() >= params.timeLimit) ||
 			UserBreak)
 		{
 			consoleLog("{}: Limits reached", strat_name);

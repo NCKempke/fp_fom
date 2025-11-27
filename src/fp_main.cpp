@@ -115,7 +115,7 @@ static void runDFS(WorkerDataPtr worker, Params params, int trial)
 			bool isFeas = isSolFeasible(mip, x);
 			sol = makeFromSpan(mip, x, objval, isFeas, newViol);
 
-			sol->timeFound = gStopWatch().getElapsed();
+			sol->timeFound = gStopWatch().elapsed();
 			const std::string strat_name = fmt::format("{}_{}", toString(params.ranker), toString(params.valueChooser));
 			sol->foundBy = strat_name;
 			pool.add(sol);
@@ -175,7 +175,7 @@ static void runPortfolio(MIPData &data, const Params &params)
 
 	consoleLog("");
 	consoleInfo("Heuristics done after {}s [sols={} feas={}]",
-				gStopWatch().getElapsed(),
+				gStopWatch().elapsed(),
 				solpool.getSols().size(),
 				solpool.hasFeas());
 }
@@ -202,7 +202,7 @@ static void runSingleHeuristic(MIPData &data, const Params &params)
 		/* stop on Ctrl-C or time limit */
 		if (UserBreak)
 			break;
-		if (gStopWatch().getElapsed() >= params.timeLimit)
+		if (gStopWatch().elapsed() >= params.timeLimit)
 			break;
 	}
 
@@ -263,14 +263,14 @@ protected:
 
 	MIPModelPtr presolve(MIPModelPtr model)
 	{
+		gStopWatch().lap();
+
 		/* Presolve the model. */
 		model->presolve();
 		MIPModelPtr premodel = model->presolvedModel();
 
 		consoleLog("Presolved Problem: #rows={} #cols={} #nnz={}", premodel->nrows(), premodel->ncols(), premodel->nnz());
-		gStopWatch().stop();
-		consoleInfo("Presolve time = {}", gStopWatch().getPartial());
-		gStopWatch().start();
+		consoleInfo("Presolve time = {}", gStopWatch().lap());
 
 		/* convert the model to another solver IFF solver != presolver; this will get rid of the currently stored premodel. */
 		if (params.solver != params.presolver)
@@ -317,9 +317,11 @@ protected:
 
 		if (best_sol != NULL && was_presolved)
 		{
-			consoleLog("Time starting postsolve = {}", gStopWatch().getElapsed());
+			consoleLog("Time starting postsolve = {}", gStopWatch().elapsed());
+			gStopWatch().lap();
 			postsolved_sol = model->postsolveSolution(best_sol->x);
-			consoleLog("Time finished postsolve = {}", gStopWatch().getElapsed());
+			consoleLog("Time finished postsolve = {}", gStopWatch().elapsed());
+			consoleInfo("Postsolve time = {}", gStopWatch().lap());
 
 			// double check it is still feasible
 			FP_ASSERT(postsolved_sol.size() == origMip.ncols);
@@ -414,7 +416,7 @@ protected:
 
 	void exec()
 	{
-		gStopWatch().start();
+		gStopWatch();
 
 		// read params
 		params.readConfig();
@@ -446,11 +448,7 @@ protected:
 		/* Actually read the problem. */
 		model->readModel(args.input[0]);
 
-		gStopWatch().stop();
-		auto reading_time = gStopWatch().getPartial();
-		gStopWatch().start();
-
-		consoleInfo("Reading time = {}", reading_time);
+		consoleInfo("Reading time = {}", gStopWatch().lap());
 		consoleLog("");
 
 		/* Extract original mip data. */
@@ -500,13 +498,12 @@ protected:
 		bool infeas = engine.propagate(true);
 		FP_ASSERT(!infeas);
 
+		gStopWatch().lap();
 		/* Potentially solve the LP relaxation. */
 		if (params.solveLp)
 			solve_initial_lp(data);
 
-		gStopWatch().stop();
-		consoleInfo("LP time = {}", gStopWatch().getPartial());
-		gStopWatch().start();
+		consoleInfo("LP time = {}", gStopWatch().lap());
 
 		if (params.runPortfolio)
 		{
@@ -544,8 +541,7 @@ protected:
 		else
 			consoleLog("minAbsViol = {}", 1000000.0);
 
-		gStopWatch().stop();
-		consoleLog("time = {}", gStopWatch().getElapsed());
+		consoleLog("time = {}", gStopWatch().elapsed());
 	}
 };
 
