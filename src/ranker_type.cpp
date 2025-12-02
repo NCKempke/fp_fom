@@ -26,7 +26,11 @@ const std::unordered_map<std::string, RankerType> rankerTypeMap = {
     {"random", RankerType::RANDOM},
     {"duals", RankerType::DUALS},
     {"redcosts", RankerType::REDCOSTS},
-    {"frac", RankerType::FRAC}};
+    {"frac", RankerType::FRAC},
+    {"dualsbreakfrac", RankerType::DUALS_BREAK_FRAC},
+    {"fracbreakduals", RankerType::FRAC_BREAK_DUALS},
+    {"fracbreakredcosts", RankerType::FRAC_BREAK_REDCOSTS},
+    {"redcostsbreakfrac", RankerType::REDCOSTS_BREAK_FRAC}};
 
 /* Static methods for conversion. */
 RankerType RankerTypeFromString(const std::string &str)
@@ -46,7 +50,7 @@ RankerType RankerTypeFromString(const std::string &str)
 
 bool rankerNeedsLpSolve(RankerType ranker)
 {
-    return (ranker == RankerType::REDCOSTS || ranker == RankerType::CLIQUES || ranker == RankerType::CLIQUES2);
+    return (ranker == RankerType::DUALS || ranker == RankerType::FRAC || ranker == RankerType::REDCOSTS || ranker == RankerType::DUALS_BREAK_FRAC || ranker == RankerType::FRAC_BREAK_DUALS || ranker == RankerType::FRAC_BREAK_REDCOSTS || ranker == RankerType::REDCOSTS_BREAK_FRAC || ranker == RankerType::CLIQUES || ranker == RankerType::CLIQUES2);
 }
 
 bool rankerNeedsCliqueCover(RankerType ranker)
@@ -79,6 +83,14 @@ std::string toString(RankerType rankerType)
         return "DUALS";
     case RankerType::FRAC:
         return "FRAC";
+    case RankerType::DUALS_BREAK_FRAC:
+        return "DUALS_BREAK_FRAC";
+    case RankerType::FRAC_BREAK_DUALS:
+        return "FRAC_BREAK_DUALS";
+    case RankerType::FRAC_BREAK_REDCOSTS:
+        return "FRAC_BREAK_REDCOSTS";
+    case RankerType::REDCOSTS_BREAK_FRAC:
+        return "REDCOSTS_BREAK_FRAC";
     default:
     case RankerType::UNKNOWN:
         return "UNKNOWN";

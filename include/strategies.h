@@ -245,6 +245,107 @@ public:
 	}
 };
 
+class DualsWithFracTieBreaker : public Ranker
+{
+public:
+    virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) override
+    {
+        std::vector<int> sorted(data.mip.ncols - data.nContinuous);
+        std::vector<int> rowIntegerVariables(data.mip.ncols);
+        std::vector<bool> marked(data.mip.ncols, false);
+        const int nIntBinCols = data.nBinaries + data.nIntegers;
+        int nSorted = 0;
+
+        const auto &matrix = data.mip.rows;
+        const auto &rowBeg = matrix.beg;
+        const auto &rowCnt = matrix.cnt;
+        const auto &rowInd = matrix.ind;
+
+        FP_ASSERT(data.duals.size() >= data.mip.nRows);
+
+        std::vector<int> rowsSortedByDual(data.mip.nRows);
+        std::iota(rowsSortedByDual.begin(), rowsSortedByDual.end(), 0);
+
+        // Sort rows by dual value
+        std::sort(rowsSortedByDual.begin(), rowsSortedByDual.end(), [&](int i, int j)
+        {
+            return std::fabs(data.duals[i]) > std::fabs(data.duals[j]);
+        });
+
+        for (int i = 0; i < data.mip.nRows; ++i)
+        {
+            int iRow = rowsSortedByDual[i];
+            int nBinInt = 0;
+
+            // Extract unmarked integer/binary variables
+            for (int iNz = rowBeg[iRow]; iNz < rowBeg[iRow] + rowCnt[iRow]; ++iNz)
+            {
+                int jCol = rowInd[iNz];
+                if (data.mip.xtype[jCol] == 'C' || marked[jCol])
+                    continue;
+                marked[jCol] = true;
+                rowIntegerVariables[nBinInt++] = jCol;
+            }
+
+            if (nBinInt == 0)
+                continue;
+
+            // Sort extracted variables: primary by reduced cost (optional) but tie-break by fraction
+            std::sort(rowIntegerVariables.begin(), rowIntegerVariables.begin() + nBinInt, [&](int i, int j)
+            {
+                double frac_i = std::abs(std::round(data.primals[i]) - data.primals[i]);
+                double frac_j = std::abs(std::round(data.primals[j]) - data.primals[j]);
+
+                if (std::fabs(data.reduced_costs[i] - data.reduced_costs[j]) > 1e-12)
+                    return std::fabs(data.reduced_costs[i]) > std::fabs(data.reduced_costs[j]); // maintain original duals ordering
+                else
+                    return frac_i < frac_j; // tie-break by fraction
+            });
+
+            std::copy(rowIntegerVariables.begin(), rowIntegerVariables.begin() + nBinInt, sorted.begin() + nSorted);
+            nSorted += nBinInt;
+
+            if (nSorted == nIntBinCols)
+                break;
+        }
+
+        FP_ASSERT(nSorted == nIntBinCols);
+        return sorted;
+    }
+};
+
+class FracWithDualsTieBreaker : public Ranker
+{
+public:
+    virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) override
+    {
+        std::vector<int> sorted(data.mip.ncols - data.nContinuous);
+        size_t sorted_pos = 0;
+
+        for (int j = 0; j < data.mip.ncols; ++j)
+        {
+            if (data.mip.xtype[j] == 'B' || data.mip.xtype[j] == 'I')
+                sorted[sorted_pos++] = j;
+        }
+
+        FP_ASSERT(sorted_pos == data.mip.ncols - data.nContinuous);
+
+        std::sort(sorted.begin(), sorted.end(), [&](int i, int j)
+        {
+            double frac_i = std::abs(std::round(data.primals[i]) - data.primals[i]);
+            double frac_j = std::abs(std::round(data.primals[j]) - data.primals[j]);
+
+            if (frac_i != frac_j)
+                return frac_i < frac_j; // primary: fractionality
+            else
+                return std::fabs(data.duals[i]) > std::fabs(data.duals[j]); // tie-break: duals
+        });
+
+        return sorted;
+    }
+};
+
+
 class ByReducedCosts : public Ranker
 {
 public:
@@ -275,6 +376,78 @@ public:
 			return data.reduced_costs[i] > data.reduced_costs[j]; });
 		return sorted;
 	}
+};
+
+class FracWithRedCostTieBreaker : public Ranker
+{
+public:
+    virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) override
+    {
+        FP_ASSERT(data.mip.ncols == (data.nBinaries + data.nIntegers + data.nContinuous));
+
+        std::vector<int> sorted(data.mip.ncols - data.nContinuous);
+        int sorted_pos = 0;
+        for (int j = 0; j < data.mip.ncols; j++)
+        {
+            if (data.mip.xtype[j] == 'B' || data.mip.xtype[j] == 'I')
+            {
+                sorted[sorted_pos] = j;
+                ++sorted_pos;
+            }
+        }
+        FP_ASSERT(sorted_pos == data.mip.ncols - data.nContinuous);
+
+        std::sort(sorted.begin(), sorted.end(), [&](int i, int j)
+        {
+            double frac_i = std::abs(std::round(data.primals[i]) - data.primals[i]);
+            double frac_j = std::abs(std::round(data.primals[j]) - data.primals[j]);
+
+            if (frac_i != frac_j)
+                return frac_i < frac_j; // primary sort by fraction
+            else
+                return data.reduced_costs[i] > data.reduced_costs[j]; // tie-break by reduced cost
+        });
+
+        return sorted;
+    }
+};
+
+class RedCostWithFracTieBreaker : public Ranker
+{
+public:
+    RedCostWithFracTieBreaker(uint64_t seed) : Ranker{seed} {}
+
+    std::vector<int> operator()(const MIPData &data, const Domain &domain) override
+    {
+        assert(data.reduced_costs.size() >= data.mip.ncols);
+
+        std::vector<int> sorted(data.mip.ncols - data.nContinuous);
+        size_t sorted_pos = 0;
+        for (int j = 0; j < data.mip.ncols; j++)
+        {
+            if (data.mip.xtype[j] == 'B' || data.mip.xtype[j] == 'I')
+            {
+                sorted[sorted_pos] = j;
+                ++sorted_pos;
+            }
+        }
+
+        FP_ASSERT(sorted_pos == data.mip.ncols - data.nContinuous);
+
+        std::sort(sorted.begin(), sorted.end(), [&](int i, int j)
+        {
+            if (data.reduced_costs[i] != data.reduced_costs[j])
+                return data.reduced_costs[i] > data.reduced_costs[j]; // primary sort by reduced cost
+            else
+            {
+                double frac_i = std::abs(std::round(data.primals[i]) - data.primals[i]);
+                double frac_j = std::abs(std::round(data.primals[j]) - data.primals[j]);
+                return frac_i < frac_j; // tie-break by fraction
+            }
+        });
+
+        return sorted;
+    }
 };
 
 class RandomOrder : public Ranker
@@ -898,6 +1071,14 @@ RankerPtr makeRanker(RankerType ranker, const Params &params, const MIPData &dat
 		return RankerPtr{new ByDuals()};
 	case RankerType::FRAC:
 		return RankerPtr{new ByFrac()};
+	case RankerType::DUALS_BREAK_FRAC:
+		return RankerPtr{new DualsWithFracTieBreaker()};
+	case RankerType::FRAC_BREAK_DUALS:
+		return RankerPtr{new FracWithDualsTieBreaker()};
+	case RankerType::FRAC_BREAK_REDCOSTS:
+		return RankerPtr{new FracWithRedCostTieBreaker()};
+	case RankerType::REDCOSTS_BREAK_FRAC:
+		return RankerPtr{new RedCostWithFracTieBreaker(params.seed)};
 	default:
 	case RankerType::UNKNOWN:
 		FP_ASSERT(false);

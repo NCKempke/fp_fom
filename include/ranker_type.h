@@ -25,6 +25,10 @@ enum class RankerType
     REDCOSTS,
     DUALS,
     FRAC,
+    DUALS_BREAK_FRAC,
+    FRAC_BREAK_DUALS,
+    FRAC_BREAK_REDCOSTS,
+    REDCOSTS_BREAK_FRAC,
     UNKNOWN,
 };
 
