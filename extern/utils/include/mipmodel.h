@@ -72,7 +72,7 @@ public:
 	virtual void writeModel(const std::string &filename, const std::string &format = "") const = 0;
 	virtual void writeSol(const std::string &filename) const = 0;
 	/* Solve */
-	virtual void lpopt(char method, double tol) = 0;
+	virtual void lpopt(char method, double tol, double gapTol) = 0;
 	virtual void mipopt() = 0;
 	/* Presolve/Postsolve */
 	virtual void presolve() = 0;

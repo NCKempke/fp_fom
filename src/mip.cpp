@@ -899,7 +899,7 @@ std::vector<double> solveLP(MIPModelPtr model, const Params &params, bool enable
 	model->dblParam(DblParam::TimeLimit, std::max(params.timeLimit - gStopWatch().elapsed(), 0.0));
 	model->intParam(IntParam::Threads, params.threads);
 
-	model->lpopt(solverChar(params.lpMethod), params.lpTol);
+	model->lpopt(solverChar(params.lpMethod), params.lpTol, params.lpTol);
 
 	model->handleCtrlC(false);
 	model->logging(false);

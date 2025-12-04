@@ -28,7 +28,7 @@ public:
 	void writeModel(const std::string &filename, const std::string &format = "") const override;
 	void writeSol(const std::string &filename) const override;
 	/* Solve */
-	void lpopt(char method, double tol) override;
+	void lpopt(char method, double tol, double gapTol) override;
 	void mipopt() override;
 	/* Presolve/postsolve */
 	void presolve() override;

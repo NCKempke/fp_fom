@@ -186,8 +186,8 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 				lp->dblParam(DblParam::TimeLimit, std::max(params.timeLimit - gStopWatch().elapsed(), 0.0));
 
 				gStopWatch().lap();
-				/* This should be solved with higher precision. We should always use 1e-6. Maybe even 1e-8? */
-				lp->lpopt(solverChar(params.lpMethodFinal), 1e-6);
+				/* This should be solved with higher precision. We should always use 1e-6 for the tolerances and 1e-8 (default) for the gap! */
+				lp->lpopt(solverChar(params.lpMethodFinal), 1e-6, 1e-8);
 				consoleLog("{}: Time finished LP solve = {}", strat_name, gStopWatch().elapsed());
 				consoleLog("{}: LP time = {}", strat_name, gStopWatch().lap());
 				lpSolved++;

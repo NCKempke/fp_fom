@@ -111,7 +111,7 @@ void GUROBIModel::writeSol(const std::string &filename) const
     FP_ASSERT(env && prob);
 }
 
-void GUROBIModel::lpopt(char method, double tol)
+void GUROBIModel::lpopt(char method, double tol, double gapTol)
 {
     FP_ASSERT(env && prob);
 
@@ -143,7 +143,7 @@ void GUROBIModel::lpopt(char method, double tol)
     {
         /* Barrier method without crossover. */
         intParam(IntParam::Crossover, 0);
-        dblParam(DblParam::BarrierGap, tol);
+        dblParam(DblParam::BarrierGap, gapTol);
         GUROBI_CALL_ENV(GRBsetintparam, GRBgetenv(prob), GRB_INT_PAR_METHOD, 2);
 
         break;
@@ -152,7 +152,7 @@ void GUROBIModel::lpopt(char method, double tol)
     {
         /* Barrier with crossover. */
         intParam(IntParam::Crossover, 1);
-        dblParam(DblParam::BarrierGap, tol);
+        dblParam(DblParam::BarrierGap, gapTol);
         GUROBI_CALL_ENV(GRBsetintparam, GRBgetenv(prob), GRB_INT_PAR_METHOD, 2);
 
         break;

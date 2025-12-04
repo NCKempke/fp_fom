@@ -106,7 +106,7 @@ void CPXModel::writeSol(const std::string &filename) const
 }
 
 /* Solve */
-void CPXModel::lpopt(char method, double tol)
+void CPXModel::lpopt(char method, double tol, double gapTol)
 {
 	FP_ASSERT(env && lp);
 
@@ -133,7 +133,7 @@ void CPXModel::lpopt(char method, double tol)
 	case 'b':
 	{
 		/* Barrier without crossover. */
-		dblParam(DblParam::BarrierGap, tol);
+		dblParam(DblParam::BarrierGap, gapTol);
 		intParam(IntParam::Crossover, 0);
 		CPX_CALL(CPXbaropt, env, lp);
 		break;
@@ -141,7 +141,7 @@ void CPXModel::lpopt(char method, double tol)
 	case 'c':
 	{
 		/*Barrier with crossover. */
-		dblParam(DblParam::BarrierGap, tol);
+		dblParam(DblParam::BarrierGap, gapTol);
 		intParam(IntParam::Crossover, 1);
 		CPX_CALL(CPXbaropt, env, lp);
 		break;

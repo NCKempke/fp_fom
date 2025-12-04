@@ -108,7 +108,7 @@ void XPRSModel::writeSol(const std::string &filename) const
 }
 
 /* Solve */
-void XPRSModel::lpopt(char method, double tol)
+void XPRSModel::lpopt(char method, double tol, double gapTol)
 {
 	FP_ASSERT(prob);
 
@@ -135,7 +135,7 @@ void XPRSModel::lpopt(char method, double tol)
 	case 'b':
 	{
 		/* Barrier no crossover. */
-		dblParam(DblParam::BarrierGap, tol);
+		dblParam(DblParam::BarrierGap, gapTol);
 		intParam(IntParam::Crossover, 0);
 		XPRS_CALL(XPRSlpoptimize, prob, "b");
 
@@ -143,7 +143,7 @@ void XPRSModel::lpopt(char method, double tol)
 	}
 	case 'c':
 	{
-		dblParam(DblParam::BarrierGap, tol);
+		dblParam(DblParam::BarrierGap, gapTol);
 		intParam(IntParam::Crossover, 1);
 		XPRS_CALL(XPRSlpoptimize, prob, "b");
 

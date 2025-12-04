@@ -117,7 +117,7 @@ void COPTModel::writeSol(const std::string &filename) const
 	COPT_API_CALL(COPT_WriteSol, prob, filename.c_str());
 }
 
-void COPTModel::lpopt(char method, double tol)
+void COPTModel::lpopt(char method, double tol, double gapTol)
 {
 	const double oldBarTol = dblParam(DblParam::BarrierGap);
 	double oldPDLPTol;
@@ -148,7 +148,7 @@ void COPTModel::lpopt(char method, double tol)
 	{
 		/* Barrier, no crossover. */
 		intParam(IntParam::Crossover, 0);
-		dblParam(DblParam::BarrierGap, tol);
+		dblParam(DblParam::BarrierGap, gapTol);
 		COPT_API_CALL(COPT_SetDblParam, prob, "BarPrimalTol", tol);
 		COPT_API_CALL(COPT_SetDblParam, prob, "BarDualTol", tol);
 		COPT_API_CALL(COPT_SetIntParam, prob, COPT_INTPARAM_LPMETHOD, 2);
@@ -159,7 +159,7 @@ void COPTModel::lpopt(char method, double tol)
 	{
 		/* Barrier with crossover. */
 		intParam(IntParam::Crossover, 1);
-		dblParam(DblParam::BarrierGap, tol);
+		dblParam(DblParam::BarrierGap, gapTol);
 		COPT_API_CALL(COPT_SetIntParam, prob, COPT_INTPARAM_LPMETHOD, 2);
 
 		break;
@@ -365,7 +365,7 @@ double COPTModel::dblParam(DblParam which) const
 	switch (which)
 	{
 	case DblParam::BarrierGap:
-		COPT_API_CALL(COPT_GetDblParam, prob, COPT_DBLPARAM_RELGAP, &value);
+		COPT_API_CALL(COPT_GetDblParam, prob, "BarGapTol", &value);
 		break;
 	case DblParam::TimeLimit:
 		COPT_API_CALL(COPT_GetDblParam, prob, COPT_DBLPARAM_TIMELIMIT, &value);
@@ -390,7 +390,7 @@ void COPTModel::dblParam(DblParam which, double value)
 	switch (which)
 	{
 	case DblParam::BarrierGap:
-		COPT_API_CALL(COPT_SetDblParam, prob, COPT_DBLPARAM_RELGAP, value);
+		COPT_API_CALL(COPT_SetDblParam, prob, "BarGapTol", value);
 		break;
 	case DblParam::TimeLimit:
 		COPT_API_CALL(COPT_SetDblParam, prob, COPT_DBLPARAM_TIMELIMIT, value);
