@@ -84,6 +84,9 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 
 	const std::string strat_name = fmt::format("{}_{}", toString(params.ranker), toString(params.valueChooser));
 
+	consoleLog("{}: Time starting DFS = {}", strat_name, gStopWatch().elapsed());
+	gStopWatch().lap();
+
 	auto branch2str = [&](const Branch &br)
 	{
 		const char *sense;
@@ -185,11 +188,11 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 				lp->logging(params.enableOutput);
 				lp->dblParam(DblParam::TimeLimit, std::max(params.timeLimit - gStopWatch().elapsed(), 0.0));
 
-				gStopWatch().lap();
+				consoleInfo("DFS time: {}", gStopWatch().lap());
 				/* This should be solved with higher precision. We should always use 1e-6 for the tolerances and 1e-8 (default) for the gap! */
 				lp->lpopt(solverChar(params.lpMethodFinal), 1e-6, 1e-8);
 				consoleLog("{}: Time finished LP solve = {}", strat_name, gStopWatch().elapsed());
-				consoleLog("{}: LP time = {}", strat_name, gStopWatch().lap());
+				consoleInfo("{}: LP time = {}", strat_name, gStopWatch().lap());
 				lpSolved++;
 
 				if (lp->isPrimalFeas())
@@ -285,4 +288,10 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 	// make sure we restore the correct bounds on the LP object
 	lp->lbs(allIdx.size(), allIdx.data(), mip.lb.data());
 	lp->ubs(allIdx.size(), allIdx.data(), mip.ub.data());
+
+	if (lpSolved != 1 && numSolutions != 1) {
+		consoleInfo("DFS time: {}", gStopWatch().lap());
+	}
+
+	consoleLog("{}: Time finish DFS = {}", strat_name, gStopWatch().elapsed());
 }
