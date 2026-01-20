@@ -1,6 +1,8 @@
 # Common boilerplate
 cmake_minimum_required(VERSION 3.12)
 
+project(fom-fpr LANGUAGES CXX CUDA)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -9,26 +11,15 @@ if (${CMAKE_CURRENT_SOURCE_DIR} STREQUAL ${CMAKE_BINARY_DIR})
   message(FATAL_ERROR "In-source builds not allowed. Please make a new directory and run CMake from there")
 endif()
 
-# Determine if this is built as a subproject (using add_subdirectory)
-# or if it is the master project.
-set(MASTER_PROJECT OFF)
-if (CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
-  set(MASTER_PROJECT ON)
-  message(STATUS "Utils is MASTER PROJECT")
-  message(STATUS "CMake version: ${CMAKE_VERSION}")
-endif()
-
 find_package(Git QUIET)
 if (GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
   # If this is the master project, update submodules
-  if (MASTER_PROJECT)
-    message(STATUS "Submodules update")
-    execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init
-                    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-                    RESULT_VARIABLE GIT_SUBMOD_RESULT)
-    if(NOT GIT_SUBMOD_RESULT EQUAL "0")
+  message(STATUS "Submodules update")
+  execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init
+                  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                  RESULT_VARIABLE GIT_SUBMOD_RESULT)
+  if(NOT GIT_SUBMOD_RESULT EQUAL "0")
       message(FATAL_ERROR "git submodule update failed")
-    endif()
   endif()
 
   # Get the current working branch
@@ -48,7 +39,7 @@ if (GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
   )
 endif()
 
-project(fom-fpr)
+find_package(CUDAToolkit REQUIRED)
 
 set(COPTDIR "${CMAKE_CURRENT_SOURCE_DIR}/solvers/COPT" CACHE PATH "Path to COPT")
 set(CPLEXDIR "${CMAKE_CURRENT_SOURCE_DIR}/solvers/cplex" CACHE PATH "Path to CPLEX")
@@ -61,9 +52,8 @@ message("   Cplex directory: ${CPLEXDIR}")
 message("   Gurobi directory: ${GUROBIDIR}")
 message("   Xpress directory: ${XPRESSDIR}")
 
-# Define fp_main executable
-add_executable(fp_main
-  src/fp_main.cpp
+# Create a library with all common source files
+add_library(fp_lib STATIC
   src/cliquecover.cpp
   src/cliquetable.cpp
   src/impltable.cpp
@@ -80,19 +70,26 @@ add_executable(fp_main
   src/walkmip.cpp
 )
 
-target_include_directories(fp_main PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
+target_link_libraries(fp_lib Utils::Lib fmt::fmt)
+
+target_include_directories(fp_lib PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_include_directories(fp_main PRIVATE
-	$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-	$<INSTALL_INTERFACE:include>
+# Define fp_main executable
+add_executable(fp_main
+  src/fp_main.cpp
 )
-target_link_libraries(fp_main Utils::Lib fmt::fmt)
+
+target_link_libraries(fp_main fp_lib)
+
+# MIP competition executable
+add_executable(mipcomp_main
+  src/mipcomp_main.cpp
+)
+
+target_link_libraries(mipcomp_main fp_lib CUDA::cudart)
 
 # Add subprojects if this is master project
-if (MASTER_PROJECT)
-  add_subdirectory(extern/fmt)
-  add_subdirectory(extern/utils)
-endif()
+add_subdirectory(extern/fmt)
+add_subdirectory(extern/utils)
