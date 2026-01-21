@@ -283,7 +283,7 @@ protected:
 		return premodel;
 	}
 
-	void writeSolToFile(const MIPInstance &origMip, const std::vector<double> &sol)
+	void writeSolToFile(const MIPInstance &origMip, const std::vector<double> &sol, double best_obj)
 	{
 		if (sol.empty())
 		{
@@ -294,6 +294,7 @@ protected:
 		std::string solFile = getProbName(args.input[0]) + ".sol";
 		consoleLog("Writing feasible solution to {}...", solFile);
 		std::ofstream out(solFile);
+		out << fmt::format("=obj= {:.17g}", best_obj);
 		for (int j = 0; j < origMip.ncols; j++)
 		{
 			out << fmt::format("{} {:.17g}", origMip.cNames[j], sol[j]) << "\n";
@@ -301,9 +302,10 @@ protected:
 		consoleLog("Done");
 	}
 
-	std::vector<double> postsolveBestSol(const MIPData &data, MIPModelPtr &model, const MIPInstance &origMip, bool was_presolved)
+	std::pair<std::vector<double>, double> postsolveBestSol(const MIPData &data, MIPModelPtr &model, const MIPInstance &origMip, bool was_presolved)
 	{
 		std::vector<double> postsolved_sol;
+		double obj = 0.0;
 		SolutionPtr best_sol;
 
 		if (data.solpool.hasFeas())
@@ -316,6 +318,8 @@ protected:
 			consoleInfo("No feasible solution available!");
 
 		if (best_sol != NULL) {
+			obj = best_sol->objval;
+
 			if (was_presolved) {
 				consoleLog("Time starting postsolve = {}", gStopWatch().elapsed());
 				gStopWatch().lap();
@@ -332,7 +336,7 @@ protected:
 			}
 		}
 
-		return postsolved_sol;
+		return {postsolved_sol, obj};
 	}
 
 	MIPModelPtr make_presolver()
@@ -535,8 +539,8 @@ protected:
 					consoleInfo("Postsolve deactivated but presolve activated; cannot write final solution");
 				} else {
 					/* If we presolved using CPLEX, postsolve our solutions. */
-					std::vector<double> best_sol = postsolveBestSol(data, model, origMip, hasPresolvedModel);
-					writeSolToFile(origMip, best_sol);
+					auto [best_sol, best_obj] = postsolveBestSol(data, model, origMip, hasPresolvedModel);
+					writeSolToFile(origMip, best_sol, best_obj);
 				}
 			} else {
 				consoleInfo("Did not find feasible solution; cannot write best sol");
