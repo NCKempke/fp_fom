@@ -290,6 +290,7 @@ void Params::readConfig()
 
 	READ_ASSIGN_PARAM(mipPresolve);
 	READ_ASSIGN_PARAM(postsolve);
+	READ_ASSIGN_PARAM(writeSol);
 	READ_ASSIGN_PARAM(zeroObj);
 	READ_ASSIGN_PARAM(randomWalkProbability);
 	READ_ASSIGN_PARAM(maxRepairNonImprove);
@@ -464,6 +465,7 @@ void Params::printUsage()
 	consoleLog("lpMethodFinal={}", toString(lpMethodFinal));
 	LOG_PARAM_DEFAULT(mipPresolve);
 	LOG_PARAM_DEFAULT(postsolve);
+	LOG_PARAM_DEFAULT(writeSol);
 	LOG_PARAM_DEFAULT(zeroObj);
 	LOG_PARAM_DEFAULT(randomWalkProbability);
 	LOG_PARAM_DEFAULT(maxRepairNonImprove);
@@ -525,6 +527,7 @@ void Params::logToConsole()
 	consoleLog("lpMethodFinal = {}", toString(lpMethodFinal));
 	LOG_PARAM(mipPresolve);
 	LOG_PARAM(postsolve);
+	LOG_PARAM(writeSol);
 	LOG_PARAM(randomWalkProbability);
 	LOG_PARAM(maxRepairNonImprove);
 	LOG_PARAM(maxRepairSteps);

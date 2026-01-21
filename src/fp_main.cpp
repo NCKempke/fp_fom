@@ -315,17 +315,21 @@ protected:
 		else
 			consoleInfo("No feasible solution available!");
 
-		if (best_sol != NULL && was_presolved)
-		{
-			consoleLog("Time starting postsolve = {}", gStopWatch().elapsed());
-			gStopWatch().lap();
-			postsolved_sol = model->postsolveSolution(best_sol->x);
-			consoleLog("Time finished postsolve = {}", gStopWatch().elapsed());
-			consoleInfo("Postsolve time = {}", gStopWatch().lap());
+		if (best_sol != NULL) {
+			if (was_presolved) {
+				consoleLog("Time starting postsolve = {}", gStopWatch().elapsed());
+				gStopWatch().lap();
+				postsolved_sol = model->postsolveSolution(best_sol->x);
+				consoleLog("Time finished postsolve = {}", gStopWatch().elapsed());
+				consoleInfo("Postsolve time = {}", gStopWatch().lap());
 
-			// double check it is still feasible
-			FP_ASSERT(postsolved_sol.size() == origMip.ncols);
-			FP_ASSERT(isSolFeasible(origMip, postsolved_sol));
+				// double check it is still feasible
+				FP_ASSERT(postsolved_sol.size() == origMip.ncols);
+				FP_ASSERT(isSolFeasible(origMip, postsolved_sol));
+			} else {
+				consoleLog("No presolve executed; skipping postsolve.");
+				postsolved_sol = best_sol->x;
+			}
 		}
 
 		return postsolved_sol;
@@ -522,11 +526,21 @@ protected:
 			runSingleHeuristic(data, params);
 		}
 
-		/* If we presolved using CPLEX, postsolve our solutions. */
-		if (params.postsolve)
-		{
-			std::vector<double> best_sol = postsolveBestSol(data, model, origMip, hasPresolvedModel);
-			writeSolToFile(origMip, best_sol);
+		if (params.writeSol) {
+
+			if (data.solpool.hasFeas()) {
+				consoleInfo("Writing best found solution");
+
+				if (params.mipPresolve && !params.postsolve) {
+					consoleInfo("Postsolve deactivated but presolve activated; cannot write final solution");
+				} else {
+					/* If we presolved using CPLEX, postsolve our solutions. */
+					std::vector<double> best_sol = postsolveBestSol(data, model, origMip, hasPresolvedModel);
+					writeSolToFile(origMip, best_sol);
+				}
+			} else {
+				consoleInfo("Did not find feasible solution; cannot write best sol");
+			}
 		}
 
 		consoleInfo("Printing the solpool");

@@ -283,6 +283,7 @@ public:
 	LpAlgorithmType lpMethodFinal = LpAlgorithmType::BARRIER;
 	bool mipPresolve = true; /** Whether to presolver the problem. */
 	bool postsolve = false;	 /** Whether to postsolve found solutions. */
+	bool writeSol = false;  /** Whether to print the final solution. */
 	bool zeroObj = false;	 /** Whether to zero out the objective of the LP relaxation. */
 
 	/* repair limits */
