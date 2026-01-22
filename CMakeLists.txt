@@ -86,7 +86,13 @@ target_link_libraries(fp_main fp_lib)
 # MIP competition executable
 add_executable(mipcomp_main
   src/mipcomp_main.cpp
+  src/evolution_search.cu
+  src/gpu_data.cpp
 )
+
+# TODO: which exactly?
+set_target_properties(mipcomp_main PROPERTIES CUDA_ARCHITECTURES "70;75;80;86;90")
+set_target_properties(mipcomp_main PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 
 target_link_libraries(mipcomp_main fp_lib CUDA::cudart)
 

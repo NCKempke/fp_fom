@@ -12,6 +12,7 @@
 #include "mip.h"
 #include "worker.h"
 #include "dfs.h"
+#include "gpu_data.h"
 #include "strategies.h"
 #include "linear_propagator.h"
 #include "table_propagators.h"
@@ -283,7 +284,7 @@ protected:
 		return premodel;
 	}
 
-	void writeSolToFile(const MIPInstance &origMip, const std::vector<double> &sol)
+	void writeSolToFile(const MIPInstance &origMip, const std::vector<double> &sol, double best_obj)
 	{
 		if (sol.empty())
 		{
@@ -294,6 +295,7 @@ protected:
 		std::string solFile = getProbName(args.input[0]) + ".sol";
 		consoleLog("Writing feasible solution to {}...", solFile);
 		std::ofstream out(solFile);
+		out << fmt::format("=obj= {:.17g}", best_obj);
 		for (int j = 0; j < origMip.ncols; j++)
 		{
 			out << fmt::format("{} {:.17g}", origMip.cNames[j], sol[j]) << "\n";
@@ -301,9 +303,10 @@ protected:
 		consoleLog("Done");
 	}
 
-	std::vector<double> postsolveBestSol(const MIPData &data, MIPModelPtr &model, const MIPInstance &origMip, bool was_presolved)
+	std::pair<std::vector<double>, double> postsolveBestSol(const MIPData &data, MIPModelPtr &model, const MIPInstance &origMip, bool was_presolved)
 	{
 		std::vector<double> postsolved_sol;
+		double obj = 0.0;
 		SolutionPtr best_sol;
 
 		if (data.solpool.hasFeas())
@@ -315,20 +318,26 @@ protected:
 		else
 			consoleInfo("No feasible solution available!");
 
-		if (best_sol != NULL && was_presolved)
-		{
-			consoleLog("Time starting postsolve = {}", gStopWatch().elapsed());
-			gStopWatch().lap();
-			postsolved_sol = model->postsolveSolution(best_sol->x);
-			consoleLog("Time finished postsolve = {}", gStopWatch().elapsed());
-			consoleInfo("Postsolve time = {}", gStopWatch().lap());
+		if (best_sol != NULL) {
+			obj = best_sol->objval;
 
-			// double check it is still feasible
-			FP_ASSERT(postsolved_sol.size() == origMip.ncols);
-			FP_ASSERT(isSolFeasible(origMip, postsolved_sol));
+			if (was_presolved) {
+				consoleLog("Time starting postsolve = {}", gStopWatch().elapsed());
+				gStopWatch().lap();
+				postsolved_sol = model->postsolveSolution(best_sol->x);
+				consoleLog("Time finished postsolve = {}", gStopWatch().elapsed());
+				consoleInfo("Postsolve time = {}", gStopWatch().lap());
+
+				// double check it is still feasible
+				FP_ASSERT(postsolved_sol.size() == origMip.ncols);
+				FP_ASSERT(isSolFeasible(origMip, postsolved_sol));
+			} else {
+				consoleLog("No presolve executed; skipping postsolve.");
+				postsolved_sol = best_sol->x;
+			}
 		}
 
-		return postsolved_sol;
+		return {postsolved_sol, obj};
 	}
 
 	MIPModelPtr make_presolver()
@@ -408,10 +417,6 @@ protected:
 			consoleError("Solver {} not available; aborting", toString(params.solver));
 			exit(1);
 		}
-	}
-
-	void run_single_strategy()
-	{
 	}
 
 	void exec()
@@ -505,6 +510,15 @@ protected:
 
 		consoleInfo("LP time = {}", gStopWatch().lap());
 
+		GpuModel gpu_data(mip);
+
+
+		/* Move stuff to GPU. We probably want:
+		 *
+		 * - Problem matrix in CSR and CSC?
+		 * - Matrix bounds.
+		 * - Variable bounds.
+		 */
 		if (params.runPortfolio)
 		{
 			consoleInfo("Running portfolio!");
@@ -522,11 +536,26 @@ protected:
 			runSingleHeuristic(data, params);
 		}
 
-		/* If we presolved using CPLEX, postsolve our solutions. */
-		if (params.postsolve)
-		{
-			std::vector<double> best_sol = postsolveBestSol(data, model, origMip, hasPresolvedModel);
-			writeSolToFile(origMip, best_sol);
+
+
+
+
+
+		if (params.writeSol) {
+
+			if (data.solpool.hasFeas()) {
+				consoleInfo("Writing best found solution");
+
+				if (params.mipPresolve && !params.postsolve) {
+					consoleInfo("Postsolve deactivated but presolve activated; cannot write final solution");
+				} else {
+					/* If we presolved using CPLEX, postsolve our solutions. */
+					auto [best_sol, best_obj] = postsolveBestSol(data, model, origMip, hasPresolvedModel);
+					writeSolToFile(origMip, best_sol, best_obj);
+				}
+			} else {
+				consoleInfo("Did not find feasible solution; cannot write best sol");
+			}
 		}
 
 		consoleInfo("Printing the solpool");

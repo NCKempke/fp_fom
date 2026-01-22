@@ -43,10 +43,12 @@ struct MIPInstance
 	std::vector<double> obj;
 	// col data
 	std::vector<char> xtype;
+	std::vector<bool> is_integer;
 	std::vector<double> lb;
 	std::vector<double> ub;
 	SparseMatrix cols;
 	// row data
+	std::vector<bool> is_equality;
 	std::vector<char> sense;
 	std::vector<double> rhs;
 	SparseMatrix rows;
