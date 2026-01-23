@@ -373,6 +373,8 @@ protected:
 		data.lp = model;
 		data.lp->switchToLP();
 
+		MpsParser::loadProblem(args.input[0]);
+
 		/* Initialized propagators and do one round of propagation. */
 		const MIPInstance &mip = data.mip;
 		PropagationEngine engine{data};
