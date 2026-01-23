@@ -25,7 +25,6 @@
 #pragma once
 
 #include <algorithm>
-#include <boost/algorithm/string/predicate.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
 #include <boost/spirit/include/qi.hpp>
 #include <boost/utility/string_ref.hpp>
@@ -234,7 +233,7 @@ private:
     /// checks first word of strline and wraps it by it_begin and it_end
     ParseKey
     checkFirstWord(std::string &strline, std::string::iterator &it,
-                   boost::string_ref &word_ref);
+                   std::string_view &word_ref);
 
     ParseKey
     parseDefault(boost::iostreams::filtering_istream &file);
@@ -272,10 +271,10 @@ private:
     }
 };
 
-ParseKey
+inline ParseKey
 MpsParser::checkFirstWord(std::string &strline,
                           std::string::iterator &it,
-                          boost::string_ref &word_ref) {
+                          std::string_view &word_ref) {
     using namespace boost::spirit;
 
     it = strline.begin() + strline.find_first_not_of(" ");
@@ -286,7 +285,7 @@ MpsParser::checkFirstWord(std::string &strline,
 
     const std::size_t length = std::distance(it_start, it);
 
-    const boost::string_ref word(&(*it_start), length);
+    const std::string_view word(&(*it_start), length);
 
     word_ref = word;
 
@@ -340,7 +339,7 @@ MpsParser::parseDefault(boost::iostreams::filtering_istream &file) {
     getline(file, strline);
 
     std::string::iterator it;
-    boost::string_ref word_ref;
+    std::string_view word_ref;
     return checkFirstWord(strline, it, word_ref);
 }
 
@@ -356,7 +355,7 @@ MpsParser::parseRows(boost::iostreams::filtering_istream &file,
     while (getline(file, strline)) {
         bool isobj = false;
         std::string::iterator it;
-        boost::string_ref word_ref;
+        std::string_view word_ref;
         const ParseKey key = checkFirstWord(strline, it, word_ref);
 
         // start of new section?
@@ -466,7 +465,7 @@ MpsParser::parseCols(boost::iostreams::filtering_istream &file,
 
     while (getline(file, strline)) {
         std::string::iterator it;
-        boost::string_ref word_ref;
+        std::string_view word_ref;
         const ParseKey key = checkFirstWord(strline, it, word_ref);
 
         // start of new section?
@@ -571,7 +570,7 @@ MpsParser::parseRanges(boost::iostreams::filtering_istream &file) {
 
     while (getline(file, strline)) {
         std::string::iterator it;
-        boost::string_ref word_ref;
+        std::string_view word_ref;
         const ParseKey key = checkFirstWord(strline, it, word_ref);
 
         // start of new section?
@@ -650,7 +649,7 @@ MpsParser::parseRhs(boost::iostreams::filtering_istream &file) {
 
     while (getline(file, strline)) {
         std::string::iterator it;
-        boost::string_ref word_ref;
+        std::string_view word_ref;
         const ParseKey key = checkFirstWord(strline, it, word_ref);
 
         // start of new section?
@@ -727,7 +726,7 @@ MpsParser::parseBounds(boost::iostreams::filtering_istream &file) {
 
     while (getline(file, strline)) {
         std::string::iterator it;
-        boost::string_ref word_ref;
+        std::string_view word_ref;
         ParseKey key = checkFirstWord(strline, it, word_ref);
 
         // start of new section?
@@ -869,7 +868,7 @@ MpsParser::parseBounds(boost::iostreams::filtering_istream &file) {
     return ParseKey::kFail;
 }
 
-bool
+inline bool
 MpsParser::parseFile(const std::string &filename) {
     std::ifstream file(filename, std::ifstream::in);
     boost::iostreams::filtering_istream in;
@@ -877,21 +876,21 @@ MpsParser::parseFile(const std::string &filename) {
     if (!file)
         return false;
 
-    if (boost::algorithm::ends_with(filename, ".gz")) {
-#ifdef PAPILO_USE_BOOST_IOSTREAMS_WITH_ZLIB
-      in.push( boost::iostreams::gzip_decompressor() );
-#else
-        fmt::print("Boost iostreams required to read gz-compressed files.");
-        return false;
-#endif
-    } else if (boost::algorithm::ends_with(filename, ".bz2")) {
-#ifdef PAPILO_USE_BOOST_IOSTREAMS_WITH_BZIP2
-      in.push( boost::iostreams::bzip2_decompressor() );
-#else
-        fmt::print("Boost iostreams required to read bz2-compressed files.");
-        return false;
-#endif
-    }
+//     if (boost::algorithm::ends_with(filename, ".gz")) {
+// #ifdef PAPILO_USE_BOOST_IOSTREAMS_WITH_ZLIB
+//       in.push( boost::iostreams::gzip_decompressor() );
+// #else
+//         fmt::print("Boost iostreams required to read gz-compressed files.");
+//         return false;
+// #endif
+//     } else if (boost::algorithm::ends_with(filename, ".bz2")) {
+// #ifdef PAPILO_USE_BOOST_IOSTREAMS_WITH_BZIP2
+//       in.push( boost::iostreams::bzip2_decompressor() );
+// #else
+//         fmt::print("Boost iostreams required to read bz2-compressed files.");
+//         return false;
+// #endif
+//     }
 
     in.push(file);
 
@@ -912,7 +911,7 @@ MpsParser::parse_objective_sense(boost::iostreams::filtering_istream &file) {
     is_objective_negated = s == "MAX";
     getline(file, s);
     std::string::iterator it;
-    boost::string_ref word_ref;
+    std::string_view word_ref;
     return checkFirstWord(s, it, word_ref);
 }
 
