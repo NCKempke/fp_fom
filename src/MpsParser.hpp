@@ -25,10 +25,8 @@
 #pragma once
 
 #include <algorithm>
-#include <boost/algorithm/string/predicate.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
 #include <boost/spirit/include/qi.hpp>
-#include <boost/utility/string_ref.hpp>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -104,6 +102,8 @@ public:
         matrix.ind.resize(matrix.nnz);
         matrix.val.resize(matrix.nnz);
         matrix.cnt.resize(mip.ncols);
+        matrix.k = mip.ncols;
+        matrix.U = mip.nRows;
         for (size_t i = 0; i < parser.entries.size(); ++i) {
             matrix.val[i] = (std::get<2>(parser.entries[i]));
             matrix.ind[i] = (std::get<1>(parser.entries[i]));
@@ -116,9 +116,7 @@ public:
         matrix.cnt[mip.ncols - 1] = matrix.nnz - matrix.beg[mip.ncols - 1];
 
         mip.cols = matrix;
-        //TODO: matrix
-        // model->rows(mip.rows);
-        // names
+        mip.rows = matrix.transpose();
         mip.rNames = parser.rownames;
         mip.cNames = parser.colnames;
 
@@ -126,6 +124,9 @@ public:
             mip.maxRhs = std::max(std::abs(rhs), mip.maxRhs);
 
 
+#define PRINT_PROBLEM
+
+#ifdef PRINT_PROBLEM
         for (int j = 0; j < mip.ncols; j++)
             if ( mip.obj[j] != 0)
                 std::cout << mip.obj[j] << " " << mip.cNames[j] << " + ";
@@ -135,30 +136,20 @@ public:
             std::cout << mip.cNames[i] << " " << mip.lb[i] << " " << mip.ub[i] << " " << type << std::endl;
         }
         for (int i = 0; i < mip.nRows; i++) {
-            const auto type = mip.is_equality[i] ? "E" : "LE";
-            std::cout << mip.rNames[i] << " " << mip.rhs[i] << " " << type << std::endl;
+            std::cout << mip.rNames[i] << ": ";
+            for (int j = mip.rows.beg[i]; j < mip.rows.beg[i] + mip.rows.cnt[i]; j++) {
+                std::cout << mip.rows.val[j] << " " << mip.cNames[mip.rows.ind[j]] << " + ";
+            }
+            auto sign = mip.is_equality[i] ? " =" : "<=";
+            std::cout << sign << " " << mip.rhs[i] << std::endl;
         }
+#endif
         return mip;
 
-        // problem.setConstraintMatrix(
-        //     SparseStorage<REAL>{ std::move( parser.entries ), parser.nCols,
-        //                          parser.nRows, true },
-        //     std::move( parser.rowlhs ), std::move( parser.rowrhs ),
-        //     std::move( parser.row_flags ), true );
-        // problem.setVariableDomains( std::move( parser.lb4cols ),
-        //                             std::move( parser.ub4cols ),
-        //                             std::move( parser.col_flags ) );
-        // problem.setVariableNames( std::move( parser.colnames ) );
-        // problem.setName( std::move( filename ) );
-        // problem.setConstraintNames( std::move( parser.rownames ) );
-        // problem.set_objective_negated( parser.is_objective_negated );
-        //
-        // return problem;
     }
 
 private:
-    MpsParser() {
-    }
+    MpsParser() = default;
 
     /// load LP from MPS file as transposed triplet matrix
     bool
@@ -204,7 +195,7 @@ private:
 
     std::vector<std::tuple<int, int, double> > entries;
     std::vector<std::pair<int, double> > coeffobj;
-    // std::vector<double> rowlhs;
+
     std::vector<double> rowrhs;
     std::vector<std::string> rownames;
     std::vector<std::string> colnames;
@@ -226,7 +217,7 @@ private:
     /// checks first word of strline and wraps it by it_begin and it_end
     ParseKey
     checkFirstWord(std::string &strline, std::string::iterator &it,
-                   boost::string_ref &word_ref);
+                   std::string_view &word_ref);
 
     ParseKey
     parseDefault(boost::iostreams::filtering_istream &file);
@@ -264,10 +255,10 @@ private:
     }
 };
 
-ParseKey
+inline ParseKey
 MpsParser::checkFirstWord(std::string &strline,
                           std::string::iterator &it,
-                          boost::string_ref &word_ref) {
+                          std::string_view &word_ref) {
     using namespace boost::spirit;
 
     it = strline.begin() + strline.find_first_not_of(" ");
@@ -278,7 +269,7 @@ MpsParser::checkFirstWord(std::string &strline,
 
     const std::size_t length = std::distance(it_start, it);
 
-    const boost::string_ref word(&(*it_start), length);
+    const std::string_view word(&(*it_start), length);
 
     word_ref = word;
 
@@ -326,17 +317,17 @@ MpsParser::checkFirstWord(std::string &strline,
     return kNone;
 }
 
-ParseKey
+inline ParseKey
 MpsParser::parseDefault(boost::iostreams::filtering_istream &file) {
     std::string strline;
     getline(file, strline);
 
     std::string::iterator it;
-    boost::string_ref word_ref;
+    std::string_view word_ref;
     return checkFirstWord(strline, it, word_ref);
 }
 
-ParseKey
+inline ParseKey
 MpsParser::parseRows(boost::iostreams::filtering_istream &file,
                      std::vector<BoundType> &rowtype) {
     using namespace boost::spirit;
@@ -348,7 +339,7 @@ MpsParser::parseRows(boost::iostreams::filtering_istream &file,
     while (getline(file, strline)) {
         bool isobj = false;
         std::string::iterator it;
-        boost::string_ref word_ref;
+        std::string_view word_ref;
         const ParseKey key = checkFirstWord(strline, it, word_ref);
 
         // start of new section?
@@ -370,7 +361,7 @@ MpsParser::parseRows(boost::iostreams::filtering_istream &file,
             rowtype.push_back(kGE);
         } else if (word_ref.front() == 'E') {
             // rowlhs.push_back(INF);
-            rowrhs.push_back(INF);
+            rowrhs.push_back(0);
             is_equation.emplace_back(true);
             // rowtype.push_back( BoundType::kEq );
         } else if (word_ref.front() == 'L') {
@@ -404,12 +395,12 @@ MpsParser::parseRows(boost::iostreams::filtering_istream &file,
                          rowname); // todo use ref
 
         // todo whitespace in name possible?
-        const auto ret = rowname2idx.emplace(rowname, isobj ? (-1) : (nrows++));
+        const auto [fst, snd] = rowname2idx.emplace(rowname, isobj ? (-1) : (nrows++));
 
         if (!isobj)
             rownames.push_back(rowname);
 
-        if (!ret.second) {
+        if (!snd) {
             std::cerr << "duplicate row " << rowname << std::endl;
             return kFail;
         }
@@ -418,7 +409,7 @@ MpsParser::parseRows(boost::iostreams::filtering_istream &file,
     return kFail;
 }
 
-ParseKey
+inline ParseKey
 MpsParser::parseCols(boost::iostreams::filtering_istream &file,
                      const std::vector<BoundType> &rowtype) {
     using namespace boost::spirit;
@@ -450,15 +441,14 @@ MpsParser::parseCols(boost::iostreams::filtering_istream &file,
         }
         double coeff = result.second;
         if (rowidx >= 0)
-            entries.push_back(
-                std::make_tuple(ncols - 1, rowidx, coeff));
+            entries.emplace_back(ncols - 1, rowidx, coeff);
         else
-            coeffobj.push_back(std::make_pair(ncols - 1, coeff));
+            coeffobj.emplace_back(ncols - 1, coeff);
     };
 
     while (getline(file, strline)) {
         std::string::iterator it;
-        boost::string_ref word_ref;
+        std::string_view word_ref;
         const ParseKey key = checkFirstWord(strline, it, word_ref);
 
         // start of new section?
@@ -499,7 +489,7 @@ MpsParser::parseCols(boost::iostreams::filtering_istream &file,
             if (word_ref.empty()) // empty line
                 continue;
 
-            colname = word_ref.to_string();
+            colname = std::string(word_ref);
             auto ret = colname2idx.emplace(colname, ncols++);
             colnames.push_back(colname);
 
@@ -510,9 +500,7 @@ MpsParser::parseCols(boost::iostreams::filtering_istream &file,
 
             assert(lb4cols.size() == is_col_integer.size());
 
-            is_col_integer.emplace_back(integral_cols
-                                            ? true
-                                            : false);
+            is_col_integer.emplace_back(integral_cols);
 
             // initialize with default bounds
             if (integral_cols) {
@@ -563,7 +551,7 @@ MpsParser::parseRanges(boost::iostreams::filtering_istream &file) {
 
     while (getline(file, strline)) {
         std::string::iterator it;
-        boost::string_ref word_ref;
+        std::string_view word_ref;
         const ParseKey key = checkFirstWord(strline, it, word_ref);
 
         // start of new section?
@@ -642,7 +630,7 @@ MpsParser::parseRhs(boost::iostreams::filtering_istream &file) {
 
     while (getline(file, strline)) {
         std::string::iterator it;
-        boost::string_ref word_ref;
+        std::string_view word_ref;
         const ParseKey key = checkFirstWord(strline, it, word_ref);
 
         // start of new section?
@@ -719,7 +707,7 @@ MpsParser::parseBounds(boost::iostreams::filtering_istream &file) {
 
     while (getline(file, strline)) {
         std::string::iterator it;
-        boost::string_ref word_ref;
+        std::string_view word_ref;
         ParseKey key = checkFirstWord(strline, it, word_ref);
 
         // start of new section?
@@ -861,7 +849,7 @@ MpsParser::parseBounds(boost::iostreams::filtering_istream &file) {
     return ParseKey::kFail;
 }
 
-bool
+inline bool
 MpsParser::parseFile(const std::string &filename) {
     std::ifstream file(filename, std::ifstream::in);
     boost::iostreams::filtering_istream in;
@@ -869,21 +857,21 @@ MpsParser::parseFile(const std::string &filename) {
     if (!file)
         return false;
 
-    if (boost::algorithm::ends_with(filename, ".gz")) {
-#ifdef PAPILO_USE_BOOST_IOSTREAMS_WITH_ZLIB
-      in.push( boost::iostreams::gzip_decompressor() );
-#else
-        fmt::print("Boost iostreams required to read gz-compressed files.");
-        return false;
-#endif
-    } else if (boost::algorithm::ends_with(filename, ".bz2")) {
-#ifdef PAPILO_USE_BOOST_IOSTREAMS_WITH_BZIP2
-      in.push( boost::iostreams::bzip2_decompressor() );
-#else
-        fmt::print("Boost iostreams required to read bz2-compressed files.");
-        return false;
-#endif
-    }
+//     if (boost::algorithm::ends_with(filename, ".gz")) {
+// #ifdef PAPILO_USE_BOOST_IOSTREAMS_WITH_ZLIB
+//       in.push( boost::iostreams::gzip_decompressor() );
+// #else
+//         fmt::print("Boost iostreams required to read gz-compressed files.");
+//         return false;
+// #endif
+//     } else if (boost::algorithm::ends_with(filename, ".bz2")) {
+// #ifdef PAPILO_USE_BOOST_IOSTREAMS_WITH_BZIP2
+//       in.push( boost::iostreams::bzip2_decompressor() );
+// #else
+//         fmt::print("Boost iostreams required to read bz2-compressed files.");
+//         return false;
+// #endif
+//     }
 
     in.push(file);
 
@@ -904,11 +892,11 @@ MpsParser::parse_objective_sense(boost::iostreams::filtering_istream &file) {
     is_objective_negated = s == "MAX";
     getline(file, s);
     std::string::iterator it;
-    boost::string_ref word_ref;
+    std::string_view word_ref;
     return checkFirstWord(s, it, word_ref);
 }
 
-bool
+inline bool
 MpsParser::parse(boost::iostreams::filtering_istream &file) {
     nnz = 0;
     ParseKey keyword = kNone;
