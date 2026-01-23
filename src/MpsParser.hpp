@@ -131,11 +131,11 @@ public:
                 std::cout << mip.obj[j] << " " << mip.cNames[j] << " + ";
         std::cout<< std::endl;
         for (int i = 0; i < mip.ncols; i++) {
-            auto type = mip.is_integer[i] ? "integer" : "continuous";
+            const auto type = mip.is_integer[i] ? "integer" : "continuous";
             std::cout << mip.cNames[i] << " " << mip.lb[i] << " " << mip.ub[i] << " " << type << std::endl;
         }
         for (int i = 0; i < mip.nRows; i++) {
-            auto type = mip.is_equality[i] ? "E" : "LE";
+            const auto type = mip.is_equality[i] ? "E" : "LE";
             std::cout << mip.rNames[i] << " " << mip.rhs[i] << " " << type << std::endl;
         }
         return mip;
