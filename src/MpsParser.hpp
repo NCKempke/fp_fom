@@ -35,8 +35,10 @@
 #include <tuple>
 #include <utility>
 #include "pdqsort/pdqsort.h"
+#include "maths.h"
 
 #include <boost/iostreams/filter/gzip.hpp>
+#include <sys/stat.h>
 
 const static double INF = 1e20;
 
@@ -79,9 +81,9 @@ public:
         // get obj
         mip.objSense = 1;
         mip.objOffset = parser.objoffset;
-        mip.obj.resize(mip.ncols);
-        // for (int i = 0; i < mip.ncols; ++i)
-        //     mip.obj[parser.coeffobj[i].first] = parser.coeffobj[i].second;
+        mip.obj.resize(mip.ncols, 0);
+        for (auto coeffobj : parser.coeffobj)
+            mip.obj[coeffobj.first] = coeffobj.second;
         // get col data
         mip.ub.resize(mip.ncols);
         mip.ub = parser.ub4cols;
@@ -92,24 +94,51 @@ public:
         mip.is_integer = parser.is_col_integer;
         mip.rhs.resize(mip.nRows);
         mip.rhs = parser.rowrhs;
+
+        SparseMatrix matrix{};
+        // FP_ASSERT(env && prob);
+        matrix.beg.resize(mip.ncols);
+        matrix.k = mip.ncols;
+
+        matrix.nnz = parser.entries.size();
+        matrix.ind.resize(matrix.nnz);
+        matrix.val.resize(matrix.nnz);
+        matrix.cnt.resize(mip.ncols);
+        for (size_t i = 0; i < parser.entries.size(); ++i) {
+            matrix.val[i] = (std::get<2>(parser.entries[i]));
+            matrix.ind[i] = (std::get<1>(parser.entries[i]));
+            if (i == 0 or std::get<0>(parser.entries[i]) != std::get<0>(parser.entries[i - 1])) {
+                matrix.beg[std::get<0>(parser.entries[i])] = static_cast<int>(i);
+            }
+        }
+        for (int j = 0; j < (mip.ncols - 1); j++)
+            matrix.cnt[j] = matrix.beg[j + 1] - matrix.beg[j];
+        matrix.cnt[mip.ncols - 1] = matrix.nnz - matrix.beg[mip.ncols - 1];
+
+        mip.cols = matrix;
         //TODO: matrix
         // model->rows(mip.rows);
         // names
         mip.rNames = parser.rownames;
         mip.cNames = parser.colnames;
 
-        for (const auto &rhs : mip.rhs)
+        for (const auto &rhs: mip.rhs)
             mip.maxRhs = std::max(std::abs(rhs), mip.maxRhs);
 
-        for (int i=0; i<mip.ncols; i++) {
+
+        for (int j = 0; j < mip.ncols; j++)
+            if ( mip.obj[j] != 0)
+                std::cout << mip.obj[j] << " " << mip.cNames[j] << " + ";
+        std::cout<< std::endl;
+        for (int i = 0; i < mip.ncols; i++) {
             auto type = mip.is_integer[i] ? "integer" : "continuous";
-            std::cout <<  mip.cNames[i] << " " << mip.lb[i] << " " << mip.ub[i] << " " << type << std::endl;
+            std::cout << mip.cNames[i] << " " << mip.lb[i] << " " << mip.ub[i] << " " << type << std::endl;
         }
-        for (int i=0; i<mip.nRows; i++) {
+        for (int i = 0; i < mip.nRows; i++) {
             auto type = mip.is_equality[i] ? "E" : "LE";
-            std::cout <<  mip.rNames[i] << " " << mip.rhs[i] << " " << type << std::endl;
+            std::cout << mip.rNames[i] << " " << mip.rhs[i] << " " << type << std::endl;
         }
-            return mip;
+        return mip;
 
         // problem.setConstraintMatrix(
         //     SparseStorage<REAL>{ std::move( parser.entries ), parser.nCols,
@@ -648,9 +677,9 @@ MpsParser::parseRhs(boost::iostreams::filtering_istream &file) {
             }
             // if (row_type[rowidx] == kEq ||
             //     row_type[rowidx] == kLE) {
-                assert(static_cast<size_t>( rowidx ) < rowrhs.size());
-                rowrhs[rowidx] = val;
-                // is_equation[rowidx].unset(RowFlag::kRhsInf);
+            assert(static_cast<size_t>( rowidx ) < rowrhs.size());
+            rowrhs[rowidx] = val;
+            // is_equation[rowidx].unset(RowFlag::kRhsInf);
             // }
 
             // if (row_type[rowidx] == kEq ||
@@ -779,11 +808,10 @@ MpsParser::parseBounds(boost::iostreams::filtering_istream &file) {
             } else {
                 if (islb)
                     // is_col_integer[colidx].set(ColFlag::kLbInf);
-                        lb4cols[colidx] = -INF;
+                    lb4cols[colidx] = -INF;
                 if (isub)
                     // is_col_integer[colidx].set(ColFlag::kUbInf);
                     ub4cols[colidx] = INF;
-
             }
             continue;
         }

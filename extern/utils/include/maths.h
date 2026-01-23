@@ -398,6 +398,9 @@ public:
 	std::vector<double> val; //< values
 	// constructors
 	SparseMatrix() = default;
+	SparseMatrix(std::tuple<int, int, int> row) {
+
+	}
 	SparseMatrix(std::initializer_list<std::initializer_list<double>> lst)
 	{
 		for (const auto &row : lst)
