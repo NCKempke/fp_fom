@@ -5,6 +5,8 @@
 class EvolutionSearch {
 public:
     GpuModel model;
+    int n_random_moves = 100000;
+    int n_rounds = 10;
 
     /* TODO: GPU solution pool. */
 

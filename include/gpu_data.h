@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mip.h"
+#include "thrust/device_vector.h"
 
 class GpuModel {
 public:
@@ -10,14 +11,14 @@ public:
     double* ub;
     char* var_type;
     // TODO:
-    // bool* is_integer;
+    thrust::device_vector<bool> is_integer;
 
     /* CSR */
-    double* row_values;
+    double* row_val;
     int* col_idx;
     int* row_ptr;
 
-    double* row_values_trans;
+    double* row_val_trans;
     int* row_ptr_trans;
     int* col_idx_trans;
 
@@ -25,7 +26,7 @@ public:
     double* rhs;
     char* sense;
     // TODO:
-    // bool* is_equality;
+    thrust::device_vector<bool> is_equality;
 
     int nrows;
     int ncols;

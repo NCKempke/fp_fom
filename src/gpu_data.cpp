@@ -8,16 +8,17 @@ GpuModel::GpuModel(const MIPInstance& mip) {
     objective = copyinit_to_device(mip.obj);
     lb = copyinit_to_device(mip.lb);
     ub = copyinit_to_device(mip.ub);
-    // is_integer = copyinit_to_device(mip.is_integer);
+
+    // is_integer = mip.is_integer TODO
     var_type = copyinit_to_device(mip.xtype);
 
     // bool* is_integer;
-    row_values = copyinit_to_device(row_matrix.val);
+    row_val = copyinit_to_device(row_matrix.val);
     col_idx = copyinit_to_device(row_matrix.ind);
     // TODO: is there a sentinel value?
     row_ptr = copyinit_to_device(row_matrix.beg);
 
-    row_values_trans = copyinit_to_device(col_matrix.val);
+    row_val_trans = copyinit_to_device(col_matrix.val);
     col_idx_trans = copyinit_to_device(col_matrix.ind);
     // TODO: is there a sentinel value?
     row_ptr_trans = copyinit_to_device(col_matrix.beg);
@@ -38,11 +39,11 @@ GpuModel::~GpuModel() {
 
     // device_free(is_integer);
 
-    device_free(row_values);
+    device_free(row_val);
     device_free(col_idx);
     device_free(row_ptr);
 
-    device_free(row_values_trans);
+    device_free(row_val_trans);
     device_free(col_idx_trans);
     device_free(row_ptr_trans);
 

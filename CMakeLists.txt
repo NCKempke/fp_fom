@@ -94,8 +94,14 @@ add_executable(mipcomp_main
 set_target_properties(mipcomp_main PROPERTIES CUDA_ARCHITECTURES "70;75;80;86;90")
 set_target_properties(mipcomp_main PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 
+# Include CCCL headers
+target_include_directories(mipcomp_main PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/cccl/cub
+    ${CMAKE_CURRENT_SOURCE_DIR}/cccl/thrust
+    ${CMAKE_CURRENT_SOURCE_DIR}/cccl/libcudacxx/include
+)
+
 target_link_libraries(mipcomp_main fp_lib CUDA::cudart)
 
-# Add subprojects if this is master project
 add_subdirectory(extern/fmt)
 add_subdirectory(extern/utils)
