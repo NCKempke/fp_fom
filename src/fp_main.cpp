@@ -82,8 +82,8 @@ static void runDFS(WorkerDataPtr worker, Params params, int trial)
 	}
 	else
 	{
-		strategy = std::make_unique<BranchNew>(data);
-		dynamic_cast<BranchNew &>(*strategy).setup(domain, ranker, chooser);
+		strategy = std::make_unique<BranchFlow>(data);
+		dynamic_cast<BranchFlow &>(*strategy).setup(domain, ranker, chooser);
 	}
 
 	Domain::iterator mark = engine.mark();

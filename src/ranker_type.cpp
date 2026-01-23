@@ -30,7 +30,9 @@ const std::unordered_map<std::string, RankerType> rankerTypeMap = {
     {"dualsbreakfrac", RankerType::DUALS_BREAK_FRAC},
     {"fracbreakduals", RankerType::FRAC_BREAK_DUALS},
     {"fracbreakredcosts", RankerType::FRAC_BREAK_REDCOSTS},
-    {"redcostsbreakfrac", RankerType::REDCOSTS_BREAK_FRAC}};
+    {"redcostsbreakfrac", RankerType::REDCOSTS_BREAK_FRAC},
+    {"tsp", RankerType::TSP}
+};
 
 /* Static methods for conversion. */
 RankerType RankerTypeFromString(const std::string &str)
@@ -91,6 +93,8 @@ std::string toString(RankerType rankerType)
         return "FRAC_BREAK_REDCOSTS";
     case RankerType::REDCOSTS_BREAK_FRAC:
         return "REDCOSTS_BREAK_FRAC";
+    case RankerType::TSP:
+        return "TSP";
     default:
     case RankerType::UNKNOWN:
         return "UNKNOWN";

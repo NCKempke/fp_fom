@@ -24,6 +24,7 @@
 #include <memory>
 #include <numeric>
 #include <random>
+#include <span>
 #include <vector>
 
 /* Policy to sort variables */
@@ -245,10 +246,58 @@ public:
 	}
 };
 
+class TSP : public Ranker
+{
+	std::vector<int> operator()(const MIPData &data, const Domain &domain) override
+	{
+		std::vector<bool> in_eq_clique(data.mip.ncols, false);
+		std::vector<int> eq_clique_vars;
+		eq_clique_vars.reserve(data.mip.ncols);
+
+		const auto &matrix = data.mip.rows;
+		const auto &rowBeg = matrix.beg;
+		const auto &rowCnt = matrix.cnt;
+		const auto &rowInd = matrix.ind;
+
+		for (int irow = 0; irow < data.mip.nRows; ++irow)
+		{
+			if (data.rclass[irow] == RowClass::CLIQUE_EQ)
+				continue;
+
+			for (int inz = rowBeg[irow]; inz < rowBeg[irow] + rowCnt[irow]; ++inz)
+			{
+				int jcol = rowInd[inz];
+				assert(data.mip.xtype[jcol] == 'B');
+
+				if (!in_eq_clique[jcol]) {
+					in_eq_clique[jcol] = true;
+					eq_clique_vars.push_back(jcol);
+				}
+			}
+		}
+
+		// /* Sort the found rows greedily by cost. */
+		// std::sort(eq_clique_vars.begin(), eq_clique_vars.end(), [&](int i, int j) {
+		// 	/* Return true if i before j. */
+		// 	return data.mip.obj[i] < data.mip.obj[j];
+		// });
+
+		/* Append rest of the variable in any order. */
+		for (int jcol = 0; jcol < data.mip.ncols; ++jcol) {
+			if (!in_eq_clique[jcol])
+				eq_clique_vars.push_back(jcol);
+		}
+
+		FP_ASSERT(static_cast<int>(eq_clique_vars.size()) == data.mip.ncols);
+
+		return eq_clique_vars;
+	}
+};
+
 class DualsWithFracTieBreaker : public Ranker
 {
 public:
-    virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) override
+    std::vector<int> operator()(const MIPData &data, const Domain &domain) override
     {
         std::vector<int> sorted(data.mip.ncols - data.nContinuous);
         std::vector<int> rowIntegerVariables(data.mip.ncols);
@@ -1040,12 +1089,149 @@ public:
 		return {};
 	}
 
-private:
+protected:
 	const MIPData &data;
+private:
 	ValuePtr chooser;
 	std::vector<int> sorted;
 	std::vector<int> invmap;
 };
+
+class BranchFlow : public BranchNew {
+public:
+	BranchFlow(const MIPData &_data) : BranchNew(_data) {};
+
+	std::span<const int> row_vars(int row) const {
+		return { &data.mip.rows.ind[data.mip.rows.beg[row]], static_cast<size_t>(data.mip.rows.cnt[row]) };
+	}
+
+	bool is_inflow_satisfied(int row, const Domain &domain) {
+		double inflow = 0.0;
+
+		for (int var : row_vars(row)) {
+			/* Count inflow for all fixed variables; if this does not suffice, we can use this constraint to pick a new flow path. */
+			if (domain.lb(var) == domain.ub(var))
+			{
+				inflow += domain.lb(var);
+			}
+		}
+
+		return equal(inflow, data.mip.rhs[row]);
+	}
+
+	bool is_flow_satisfied(int row, const Domain &domain) {
+		double inflow = 0.0, outflow = 0.0;
+
+		for (int k = data.mip.rows.beg[row]; k < data.mip.rows.beg[row] + data.mip.rows.cnt[row]; ++k) {
+			int var = data.mip.rows.ind[k];
+			double coef = data.mip.rows.val[k];
+
+			/* We compare the inflow and outflow for all fixed variables. If there is a mismatch, we can use this constraint to push flow out/in. */
+			if (domain.lb(var) == domain.ub(var))
+			{
+				if (coef > 0) {
+					inflow += coef * domain.lb(var);
+				} else {
+					outflow -= coef * domain.lb(var);
+				}
+			}
+		}
+		return equal(inflow, outflow);
+	}
+
+	void setup(const Domain &domain, RankerPtr ranker, ValuePtr _chooser) {
+		for (int irow = 0; irow < data.mip.nRows; ++irow)
+		{
+			if ((data.rclass[irow] == RowClass::CLIQUE_EQ_N || data.rclass[irow] == RowClass::CLIQUE_EQ) && data.mip.rhs[irow] != 0.0)
+			{
+				inflow_requirement.push_back(irow);
+				consoleLog("Adding row {} with rhs {} to inflow rows", irow, data.mip.rhs[irow]);
+			}
+			else
+				flow_conservation.push_back(irow);
+		}
+
+		BranchNew::setup(domain, ranker, _chooser);
+	}
+
+	std::vector<Branch> branch(const Domain &domain, bool nodeInfeas, const Branch &oldBranch) override
+	{
+		std::vector<int> inflow_unsatisfied;
+
+		/* Try to find the first unsatisfied flow conservation constraint. */
+		for (int row : flow_conservation){
+			if (!is_flow_satisfied(row, domain)) {
+				std::vector<int> free_vars;
+
+				/* Pick a variable from this constraint to satisfy the flow. */
+				for (int var : row_vars(row)){
+					if (!equal(domain.lb(var), domain.ub(var)))
+						free_vars.push_back(var);
+				}
+
+				if (free_vars.empty()) {
+					consoleLog("No more variables left to satisfy flow constraint.");
+					return {};
+				}
+
+				std::sort(free_vars.begin(), free_vars.end(), [&](int i, int j){
+					/* True if i before j. */
+					return data.mip.obj[i] < data.mip.obj[j];
+				});
+
+				consoleLog("Use {} to satisfy flow", free_vars[0]);
+				return {{free_vars[0], 'L', 1.0},{free_vars[0], 'U', 0.0}};
+			}
+		}
+
+		/* If we did not find an unsatisfied flow conservation constraint, find an unsatisfied inflow constraint instead. */
+		for (int row : inflow_requirement)
+		{
+			if (!is_inflow_satisfied(row, domain))
+			{
+				std::vector<int> free_vars;
+
+				/* Pick a variable from this constraint to satisfy the inflow. */
+				for (int var : row_vars(row))
+				{
+					if (!equal(domain.lb(var), domain.ub(var)))
+						free_vars.push_back(var);
+				}
+
+				if (free_vars.empty())
+				{
+					consoleLog("No more variables left to satisfy inflow constraint.");
+					return {};
+				}
+
+				std::sort(free_vars.begin(), free_vars.end(), [&](int i, int j){
+					/* True if i before j. */
+					return data.mip.obj[i] < data.mip.obj[j];
+				});
+
+				consoleLog("Use {} to satisfy inflow", free_vars[0]);
+				return {{free_vars[0], 'L', 1.0}, {free_vars[0], 'U', 0.0}};
+			}
+		}
+
+		consoleLog("Using old branching");
+		/* Backup strategy. */
+		return BranchNew::branch(domain, nodeInfeas, oldBranch);
+	}
+
+private:
+	/* Each equality clique:
+	 *   forall nodes i: sum_t in_flow_it == 1
+	 * shows which nodes have been visited already (in_flow_it is flow from i at t). */
+	std::vector<int> inflow_requirement;
+
+	/* Flow-balance constraints:
+	 *   forall time t: sum_i in_flow_it - sum_i out_flow_it == 0
+     * so the sum of all flows from all nodes at t must equal the sum of all flows to all nodes at t.
+	 */
+	std::vector<int> flow_conservation;
+};
+
 
 RankerPtr makeRanker(RankerType ranker, const Params &params, const MIPData &data)
 {
@@ -1079,6 +1265,8 @@ RankerPtr makeRanker(RankerType ranker, const Params &params, const MIPData &dat
 		return RankerPtr{new FracWithRedCostTieBreaker()};
 	case RankerType::REDCOSTS_BREAK_FRAC:
 		return RankerPtr{new RedCostWithFracTieBreaker(params.seed)};
+	case RankerType::TSP:
+		return RankerPtr{new TSP()};
 	default:
 	case RankerType::UNKNOWN:
 		FP_ASSERT(false);

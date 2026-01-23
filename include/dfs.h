@@ -112,7 +112,7 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 		// apply branch
 		if (branch.index != -1)
 		{
-			// consoleLog("Apply branching {}", branch2str(branch));
+			consoleLog("Apply branching {}", branch2str(branch));
 			// standard variable branch
 			if (branch.sense == 'U')
 			{
