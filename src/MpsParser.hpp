@@ -101,9 +101,15 @@ public:
         for (const auto &rhs : mip.rhs)
             mip.maxRhs = std::max(std::abs(rhs), mip.maxRhs);
 
-        for (int i=0; i<mip.ncols; i++)
-            std::cout <<  mip.cNames[i] << " " << mip.lb[i] << " " << mip.ub[i] << " " << mip.is_integer[i] << std::endl;
-        return mip;
+        for (int i=0; i<mip.ncols; i++) {
+            auto type = mip.is_integer[i] ? "integer" : "continuous";
+            std::cout <<  mip.cNames[i] << " " << mip.lb[i] << " " << mip.ub[i] << " " << type << std::endl;
+        }
+        for (int i=0; i<mip.nRows; i++) {
+            auto type = mip.is_equality[i] ? "E" : "LE";
+            std::cout <<  mip.rNames[i] << " " << mip.rhs[i] << " " << type << std::endl;
+        }
+            return mip;
 
         // problem.setConstraintMatrix(
         //     SparseStorage<REAL>{ std::move( parser.entries ), parser.nCols,
@@ -169,7 +175,7 @@ private:
 
     std::vector<std::tuple<int, int, double> > entries;
     std::vector<std::pair<int, double> > coeffobj;
-    std::vector<double> rowlhs;
+    // std::vector<double> rowlhs;
     std::vector<double> rowrhs;
     std::vector<std::string> rownames;
     std::vector<std::string> colnames;
@@ -329,26 +335,26 @@ MpsParser::parseRows(boost::iostreams::filtering_istream &file,
 
         if (word_ref.front() == 'G') {
             assert(false);
-            rowlhs.push_back(-INF);
+            // rowlhs.push_back(-INF);
             rowrhs.push_back(INF);
             // is_equation.emplace_back( RowFlag::kRhsInf );
             rowtype.push_back(kGE);
         } else if (word_ref.front() == 'E') {
-            rowlhs.push_back(INF);
+            // rowlhs.push_back(INF);
             rowrhs.push_back(INF);
             is_equation.emplace_back(true);
             // rowtype.push_back( BoundType::kEq );
         } else if (word_ref.front() == 'L') {
-            rowlhs.push_back(INF);
-            rowrhs.push_back(INF);
+            // rowlhs.push_back(INF);
+            rowrhs.push_back(0);
             is_equation.emplace_back(false);
             // rowtype.push_back( BoundType::kLE );
         }
         // todo properly treat multiple free rows
         else if (word_ref.front() == 'N') {
             if (hasobj) {
-                rowlhs.push_back(INF);
-                rowrhs.push_back(INF);
+                // rowlhs.push_back(INF);
+                // rowrhs.push_back(INF);
                 // RowFlags rowf;
                 // rowf.set( RowFlag::kLhsInf, RowFlag::kRhsInf );
                 // is_equation.emplace_back( rowf );
@@ -524,7 +530,7 @@ ParseKey
 MpsParser::parseRanges(boost::iostreams::filtering_istream &file) {
     using namespace boost::spirit;
     std::string strline;
-    assert(rowrhs.size() == rowlhs.size());
+    // assert(rowrhs.size() == rowlhs.size());
 
     while (getline(file, strline)) {
         std::string::iterator it;
@@ -558,27 +564,28 @@ MpsParser::parseRanges(boost::iostreams::filtering_istream &file) {
             double val = result.second;
             assert(static_cast<size_t>( rowidx ) < rowrhs.size());
 
-            if (row_type[rowidx] == kGE) {
-                assert(false);
-                // is_equation[rowidx].unset( RowFlag::kRhsInf );
-                rowrhs[rowidx] = rowlhs[rowidx] + (abs(val));
-            } else if (row_type[rowidx] == kLE) {
-                // is_equation[rowidx].unset( RowFlag::kLhsInf );
-                is_equation[rowidx] = false;
-                rowlhs[rowidx] = rowrhs[rowidx] - (abs(val));
-            } else {
-                assert(row_type[rowidx] == BoundType::kEq);
-                assert(rowrhs[rowidx] == rowlhs[rowidx]);
-                assert(is_equation[rowidx]);
-
-                if (val > 0.0) {
-                    // is_equation[rowidx].unset(RowFlag::kEquation);
-                    rowrhs[rowidx] = rowrhs[rowidx] + (val);
-                } else if (val < 0.0) {
-                    rowlhs[rowidx] = rowlhs[rowidx] + val;
-                    // is_equation[rowidx].unset(RowFlag::kEquation);
-                }
-            }
+            assert(false);
+            // if (row_type[rowidx] == kGE) {
+            //     assert(false);
+            //     // is_equation[rowidx].unset( RowFlag::kRhsInf );
+            //     rowrhs[rowidx] = rowlhs[rowidx] + (abs(val));
+            // } else if (row_type[rowidx] == kLE) {
+            //     // is_equation[rowidx].unset( RowFlag::kLhsInf );
+            //     is_equation[rowidx] = false;
+            //     rowrhs[rowidx] = rowrhs[rowidx] - (abs(val));
+            // } else {
+            //     assert(row_type[rowidx] == BoundType::kEq);
+            //     assert(rowrhs[rowidx] == rowlhs[rowidx]);
+            //     assert(is_equation[rowidx]);
+            //
+            //     if (val > 0.0) {
+            //         // is_equation[rowidx].unset(RowFlag::kEquation);
+            //         // rowrhs[rowidx] = rowrhs[rowidx] + (val);
+            //     } else if (val < 0.0) {
+            //         rowlhs[rowidx] = rowlhs[rowidx] + val;
+            //         // is_equation[rowidx].unset(RowFlag::kEquation);
+            //     }
+            // }
         };
 
         std::istringstream is(strline);
@@ -648,11 +655,11 @@ MpsParser::parseRhs(boost::iostreams::filtering_istream &file) {
 
             // if (row_type[rowidx] == kEq ||
             //     row_type[rowidx] == kGE) {
-            if (is_equation[rowidx]){
-                assert(static_cast<size_t>( rowidx ) < rowlhs.size());
-                rowlhs[rowidx] = val;
-                // is_equation[rowidx].unset(RowFlag::kLhsInf);
-            }
+            // if (is_equation[rowidx]){
+            //     // assert(static_cast<size_t>( rowidx ) < rowlhs.size());
+            //     rowrhs[rowidx] = val;
+            //     // is_equation[rowidx].unset(RowFlag::kLhsInf);
+            // }
         };
 
         std::istringstream is(strline);
