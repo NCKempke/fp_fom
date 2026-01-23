@@ -27,7 +27,6 @@
 #include <algorithm>
 #include <boost/iostreams/filtering_stream.hpp>
 #include <boost/spirit/include/qi.hpp>
-#include <boost/utility/string_ref.hpp>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -147,25 +146,10 @@ public:
 #endif
         return mip;
 
-        // problem.setConstraintMatrix(
-        //     SparseStorage<REAL>{ std::move( parser.entries ), parser.nCols,
-        //                          parser.nRows, true },
-        //     std::move( parser.rowlhs ), std::move( parser.rowrhs ),
-        //     std::move( parser.row_flags ), true );
-        // problem.setVariableDomains( std::move( parser.lb4cols ),
-        //                             std::move( parser.ub4cols ),
-        //                             std::move( parser.col_flags ) );
-        // problem.setVariableNames( std::move( parser.colnames ) );
-        // problem.setName( std::move( filename ) );
-        // problem.setConstraintNames( std::move( parser.rownames ) );
-        // problem.set_objective_negated( parser.is_objective_negated );
-        //
-        // return problem;
     }
 
 private:
-    MpsParser() {
-    }
+    MpsParser() = default;
 
     /// load LP from MPS file as transposed triplet matrix
     bool
@@ -211,7 +195,7 @@ private:
 
     std::vector<std::tuple<int, int, double> > entries;
     std::vector<std::pair<int, double> > coeffobj;
-    // std::vector<double> rowlhs;
+
     std::vector<double> rowrhs;
     std::vector<std::string> rownames;
     std::vector<std::string> colnames;
@@ -333,7 +317,7 @@ MpsParser::checkFirstWord(std::string &strline,
     return kNone;
 }
 
-ParseKey
+inline ParseKey
 MpsParser::parseDefault(boost::iostreams::filtering_istream &file) {
     std::string strline;
     getline(file, strline);
@@ -343,7 +327,7 @@ MpsParser::parseDefault(boost::iostreams::filtering_istream &file) {
     return checkFirstWord(strline, it, word_ref);
 }
 
-ParseKey
+inline ParseKey
 MpsParser::parseRows(boost::iostreams::filtering_istream &file,
                      std::vector<BoundType> &rowtype) {
     using namespace boost::spirit;
@@ -411,12 +395,12 @@ MpsParser::parseRows(boost::iostreams::filtering_istream &file,
                          rowname); // todo use ref
 
         // todo whitespace in name possible?
-        const auto ret = rowname2idx.emplace(rowname, isobj ? (-1) : (nrows++));
+        const auto [fst, snd] = rowname2idx.emplace(rowname, isobj ? (-1) : (nrows++));
 
         if (!isobj)
             rownames.push_back(rowname);
 
-        if (!ret.second) {
+        if (!snd) {
             std::cerr << "duplicate row " << rowname << std::endl;
             return kFail;
         }
@@ -425,7 +409,7 @@ MpsParser::parseRows(boost::iostreams::filtering_istream &file,
     return kFail;
 }
 
-ParseKey
+inline ParseKey
 MpsParser::parseCols(boost::iostreams::filtering_istream &file,
                      const std::vector<BoundType> &rowtype) {
     using namespace boost::spirit;
@@ -457,10 +441,9 @@ MpsParser::parseCols(boost::iostreams::filtering_istream &file,
         }
         double coeff = result.second;
         if (rowidx >= 0)
-            entries.push_back(
-                std::make_tuple(ncols - 1, rowidx, coeff));
+            entries.emplace_back(ncols - 1, rowidx, coeff);
         else
-            coeffobj.push_back(std::make_pair(ncols - 1, coeff));
+            coeffobj.emplace_back(ncols - 1, coeff);
     };
 
     while (getline(file, strline)) {
@@ -506,7 +489,7 @@ MpsParser::parseCols(boost::iostreams::filtering_istream &file,
             if (word_ref.empty()) // empty line
                 continue;
 
-            colname = word_ref.to_string();
+            colname = std::string(word_ref);
             auto ret = colname2idx.emplace(colname, ncols++);
             colnames.push_back(colname);
 
@@ -517,9 +500,7 @@ MpsParser::parseCols(boost::iostreams::filtering_istream &file,
 
             assert(lb4cols.size() == is_col_integer.size());
 
-            is_col_integer.emplace_back(integral_cols
-                                            ? true
-                                            : false);
+            is_col_integer.emplace_back(integral_cols);
 
             // initialize with default bounds
             if (integral_cols) {
@@ -915,7 +896,7 @@ MpsParser::parse_objective_sense(boost::iostreams::filtering_istream &file) {
     return checkFirstWord(s, it, word_ref);
 }
 
-bool
+inline bool
 MpsParser::parse(boost::iostreams::filtering_istream &file) {
     nnz = 0;
     ParseKey keyword = kNone;
