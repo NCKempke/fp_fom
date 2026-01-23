@@ -12,13 +12,14 @@
 #include "mip.h"
 #include "worker.h"
 #include "dfs.h"
-#include "gpu_data.h"
+// #include "gpu_data.h"
 #include "strategies.h"
 #include "linear_propagator.h"
 #include "table_propagators.h"
 #include "tool_app.h"
 #include "thread_pool.h"
 #include "version.h"
+#include "MpsParser.hpp"
 
 #include <consolelog.h>
 #include <fileconfig.h>
@@ -155,8 +156,8 @@ static void runPortfolio(MIPData &data, const Params &params)
 	ThreadPool thpool(params.threads);
 
 	/* We run the rankers frac, duals, random, redcosts, and type with random_lp for now. */
-	const std::vector<RankerType> rankers = {RankerType::FRAC, RankerType::DUALS, RankerType::RANDOM, RankerType::REDCOSTS};
-	const std::vector<ValueChooserType> valueChoosers = {ValueChooserType::RANDOM_LP};
+	const std::vector rankers = {RankerType::FRAC, RankerType::DUALS, RankerType::RANDOM, RankerType::REDCOSTS};
+	const std::vector valueChoosers = {ValueChooserType::RANDOM_LP};
 
 	/* Run all combinations. */
 	for (auto &ranker : rankers)
@@ -189,8 +190,8 @@ static void runSingleHeuristic(MIPData &data, const Params &params)
 	int tries = 0;
 	while (tries < params.maxTries)
 	{
-		WorkerDataPtr worker = std::make_shared<WorkerData>(data);
-		Domain::iterator mark = worker->engine.mark();
+		const auto worker = std::make_shared<WorkerData>(data);
+		const Domain::iterator mark = worker->engine.mark();
 
 		worker->engine.undo(mark);
 
@@ -262,27 +263,6 @@ protected:
 		data.lp->reduced_costs(data.reduced_costs.data());
 	}
 
-	MIPModelPtr presolve(MIPModelPtr model)
-	{
-		gStopWatch().lap();
-
-		/* Presolve the model. */
-		model->presolve();
-		MIPModelPtr premodel = model->presolvedModel();
-
-		consoleLog("Presolved Problem: #rows={} #cols={} #nnz={}", premodel->nrows(), premodel->ncols(), premodel->nnz());
-		consoleInfo("Presolve time = {}", gStopWatch().lap());
-
-		/* convert the model to another solver IFF solver != presolver; this will get rid of the currently stored premodel. */
-		if (params.solver != params.presolver)
-		{
-			consoleLog("Converting the problem to {}", toString(params.solver));
-			MIPModelPtr converted_model = premodel.get()->convertTo(toString(params.solver));
-			premodel = converted_model;
-		}
-
-		return premodel;
-	}
 
 	void writeSolToFile(const MIPInstance &origMip, const std::vector<double> &sol, double best_obj)
 	{
@@ -303,75 +283,7 @@ protected:
 		consoleLog("Done");
 	}
 
-	std::pair<std::vector<double>, double> postsolveBestSol(const MIPData &data, MIPModelPtr &model, const MIPInstance &origMip, bool was_presolved)
-	{
-		std::vector<double> postsolved_sol;
-		double obj = 0.0;
-		SolutionPtr best_sol;
 
-		if (data.solpool.hasFeas())
-		{
-			consoleLog("Postsolving incumbent");
-			best_sol = data.solpool.getIncumbent();
-			FP_ASSERT(best_sol);
-		}
-		else
-			consoleInfo("No feasible solution available!");
-
-		if (best_sol != NULL) {
-			obj = best_sol->objval;
-
-			if (was_presolved) {
-				consoleLog("Time starting postsolve = {}", gStopWatch().elapsed());
-				gStopWatch().lap();
-				postsolved_sol = model->postsolveSolution(best_sol->x);
-				consoleLog("Time finished postsolve = {}", gStopWatch().elapsed());
-				consoleInfo("Postsolve time = {}", gStopWatch().lap());
-
-				// double check it is still feasible
-				FP_ASSERT(postsolved_sol.size() == origMip.ncols);
-				FP_ASSERT(isSolFeasible(origMip, postsolved_sol));
-			} else {
-				consoleLog("No presolve executed; skipping postsolve.");
-				postsolved_sol = best_sol->x;
-			}
-		}
-
-		return {postsolved_sol, obj};
-	}
-
-	MIPModelPtr make_presolver()
-	{
-		FP_ASSERT(params.presolver == SolverType::CPLEX || params.presolver == SolverType::GUROBI);
-
-		if (params.presolver == SolverType::CPLEX)
-		{
-#if HAS_CPLEX
-			consoleLog("Creating CPLEX presolver.");
-			consoleLog("");
-			return std::make_shared<CPXModel>();
-#else
-			consoleError("CPLEX not available - presolve not possible.");
-			return nullptr;
-#endif
-		}
-		else if (params.presolver == SolverType::GUROBI)
-		{
-#if HAS_GUROBI
-			consoleLog("Creating GUROBI presolver.");
-			consoleLog("");
-			return std::make_shared<GUROBIModel>();
-#else
-			consoleError("GUROBI not available - presolve not possible.");
-			return nullptr;
-#endif
-		}
-		else
-		{
-			consoleError("Presolve with {} not possible; aborting", toString(params.presolver));
-			exit(1);
-		}
-	}
 
 	MIPModelPtr make_solver()
 	{
@@ -396,7 +308,6 @@ protected:
 		else if (params.solver == SolverType::COPT)
 		{
 #if HAS_COPT
-			/* CPX copt model to have presolve (as COPT does not offer any) */
 			return std::make_shared<COPTModel>();
 #else
 			consoleError("COPT as solver not available.");
@@ -419,8 +330,7 @@ protected:
 		}
 	}
 
-	void exec()
-	{
+	void exec() override {
 		gStopWatch();
 
 		// read params
@@ -435,22 +345,13 @@ protected:
 		params.logToConsole();
 		consoleLog("");
 
-		MIPModelPtr model;
-
-		/* Presolve and reading is done for all strategies together. */
-		if (params.mipPresolve)
-		{
-			model = make_presolver();
-		}
-		else
-		{
-			model = make_solver();
-		}
+		const MIPModelPtr model = make_solver();
 
 		/* Read the model. */
 		consoleLog("Reading the problem.");
 
 		/* Actually read the problem. */
+		MpsParser::loadProblem(args.input[0]);
 		model->readModel(args.input[0]);
 
 		consoleInfo("Reading time = {}", gStopWatch().lap());
@@ -459,37 +360,17 @@ protected:
 		/* Extract original mip data. */
 		MIPInstance origMip = extract(model); // TODO: move further down..
 
-		MIPModelPtr premodel;
-		bool hasPresolvedModel;
 
-		/* Generate the presolved data. Either, this is the original data or we actually do presolve! */
-		if (params.mipPresolve)
-		{
-			consoleLog("Presolving the problem.");
-			consoleLog("Original Problem:  #rows={} #cols={} #nnz={}", model->nrows(), model->ncols(), model->nnz());
-			/* In the case where there is no presolve to be done it might be that premodel will be model even after this call. */
-			premodel = presolve(model);
-			hasPresolvedModel = true;
-		}
-		else
-		{
-			consoleLog("Not presolving the problem.");
-			consoleLog("Original Problem:  #rows={} #cols={} #nnz={}", model->nrows(), model->ncols(), model->nnz());
+		consoleLog("Original Problem:  #rows={} #cols={} #nnz={}", model->nrows(), model->ncols(), model->nnz());
 
-			/* no presolve to be done; clone the original model */
-			premodel = model->clone();
-			hasPresolvedModel = false;
-		}
-
-		/* Initialize the presolved MIP data. */
 		const bool construct_cliquecover = rankerNeedsCliqueCover(params.ranker);
-		MIPData data(premodel, construct_cliquecover);
+		MIPData data(model, construct_cliquecover);
 
-		FP_ASSERT(premodel);
+		FP_ASSERT(model);
 		consoleLog("");
 
 		/* Create LP relaxation. */
-		data.lp = premodel;
+		data.lp = model;
 		data.lp->switchToLP();
 
 		/* Initialized propagators and do one round of propagation. */
@@ -510,7 +391,7 @@ protected:
 
 		consoleInfo("LP time = {}", gStopWatch().lap());
 
-		GpuModel gpu_data(mip);
+		// GpuModel gpu_data(mip);
 
 
 		/* Move stuff to GPU. We probably want:
@@ -537,22 +418,12 @@ protected:
 		}
 
 
-
-
-
-
 		if (params.writeSol) {
-
 			if (data.solpool.hasFeas()) {
 				consoleInfo("Writing best found solution");
+				auto best_sol = data.solpool.getIncumbent();
 
-				if (params.mipPresolve && !params.postsolve) {
-					consoleInfo("Postsolve deactivated but presolve activated; cannot write final solution");
-				} else {
-					/* If we presolved using CPLEX, postsolve our solutions. */
-					auto [best_sol, best_obj] = postsolveBestSol(data, model, origMip, hasPresolvedModel);
-					writeSolToFile(origMip, best_sol, best_obj);
-				}
+				writeSolToFile(origMip, best_sol->x, best_sol->objval);
 			} else {
 				consoleInfo("Did not find feasible solution; cannot write best sol");
 			}
@@ -563,7 +434,7 @@ protected:
 		data.solpool.print();
 
 		consoleInfo("[results]");
-		consoleLog("found = {}", (int)data.solpool.hasFeas());
+		consoleLog("found = {}", static_cast<int>(data.solpool.hasFeas()));
 		consoleLog("primalBound = {}", data.solpool.primalBound());
 		if (data.solpool.hasSols())
 			consoleLog("minAbsViol = {}", data.solpool.minViolation());

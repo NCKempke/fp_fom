@@ -1,6 +1,9 @@
 # Common boilerplate
 cmake_minimum_required(VERSION 3.12)
 
+set(CMAKE_CUDA_COMPILER /usr/local/cuda/bin/nvcc)
+set(CMAKE_CUDA_ARCHITECTURES 89)
+
 project(fom-fpr LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -10,6 +13,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if (${CMAKE_CURRENT_SOURCE_DIR} STREQUAL ${CMAKE_BINARY_DIR})
   message(FATAL_ERROR "In-source builds not allowed. Please make a new directory and run CMake from there")
 endif()
+
+set(BOOST_MIN_VERSION 1.65)
+find_package(Boost ${BOOST_MIN_VERSION} REQUIRED iostreams)
 
 find_package(Git QUIET)
 if (GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
@@ -81,20 +87,19 @@ add_executable(fp_main
   src/fp_main.cpp
 )
 
-target_link_libraries(fp_main fp_lib)
 
 # MIP competition executable
 add_executable(mipcomp_main
   src/mipcomp_main.cpp
-  src/evolution_search.cu
-  src/gpu_data.cpp
+#  src/evolution_search.cu
+#  src/gpu_data.cpp
 )
 
 # TODO: which exactly?
 set_target_properties(mipcomp_main PROPERTIES CUDA_ARCHITECTURES "70;75;80;86;90")
 set_target_properties(mipcomp_main PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 
-target_link_libraries(mipcomp_main fp_lib CUDA::cudart)
+target_link_libraries(mipcomp_main fp_lib CUDA::cudart Boost::iostreams)
 
 # Add subprojects if this is master project
 add_subdirectory(extern/fmt)

@@ -1,5 +1,5 @@
 /**
- * @file vectorlist.cpp
+ * @file std::vectortorlist.cpp
  * @brief Vector List data structure
  *
  * @author Domenico Salvagnin <dominiqs at gmail dot com>
