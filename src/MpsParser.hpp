@@ -104,6 +104,8 @@ public:
         matrix.ind.resize(matrix.nnz);
         matrix.val.resize(matrix.nnz);
         matrix.cnt.resize(mip.ncols);
+        matrix.k = mip.ncols;
+        matrix.U = mip.nRows;
         for (size_t i = 0; i < parser.entries.size(); ++i) {
             matrix.val[i] = (std::get<2>(parser.entries[i]));
             matrix.ind[i] = (std::get<1>(parser.entries[i]));
@@ -116,9 +118,7 @@ public:
         matrix.cnt[mip.ncols - 1] = matrix.nnz - matrix.beg[mip.ncols - 1];
 
         mip.cols = matrix;
-        //TODO: matrix
-        // model->rows(mip.rows);
-        // names
+        mip.rows = matrix.transpose();
         mip.rNames = parser.rownames;
         mip.cNames = parser.colnames;
 
@@ -126,6 +126,9 @@ public:
             mip.maxRhs = std::max(std::abs(rhs), mip.maxRhs);
 
 
+#define PRINT_PROBLEM
+
+#ifdef PRINT_PROBLEM
         for (int j = 0; j < mip.ncols; j++)
             if ( mip.obj[j] != 0)
                 std::cout << mip.obj[j] << " " << mip.cNames[j] << " + ";
@@ -135,9 +138,14 @@ public:
             std::cout << mip.cNames[i] << " " << mip.lb[i] << " " << mip.ub[i] << " " << type << std::endl;
         }
         for (int i = 0; i < mip.nRows; i++) {
-            const auto type = mip.is_equality[i] ? "E" : "LE";
-            std::cout << mip.rNames[i] << " " << mip.rhs[i] << " " << type << std::endl;
+            std::cout << mip.rNames[i] << ": ";
+            for (int j = mip.rows.beg[i]; j < mip.rows.beg[i] + mip.rows.cnt[i]; j++) {
+                std::cout << mip.rows.val[j] << " " << mip.cNames[mip.rows.ind[j]] << " + ";
+            }
+            auto sign = mip.is_equality[i] ? " =" : "<=";
+            std::cout << sign << " " << mip.rhs[i] << std::endl;
         }
+#endif
         return mip;
 
         // problem.setConstraintMatrix(
@@ -370,7 +378,7 @@ MpsParser::parseRows(boost::iostreams::filtering_istream &file,
             rowtype.push_back(kGE);
         } else if (word_ref.front() == 'E') {
             // rowlhs.push_back(INF);
-            rowrhs.push_back(INF);
+            rowrhs.push_back(0);
             is_equation.emplace_back(true);
             // rowtype.push_back( BoundType::kEq );
         } else if (word_ref.front() == 'L') {
