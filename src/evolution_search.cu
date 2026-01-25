@@ -62,7 +62,7 @@ __device__ void compute_random_move(const GpuModel &model, curandState &state, c
         const int row_idx = model.col_idx_trans[inz];
 
         /* We have <= and = only. */
-        const int is_eq = model.is_equality[row_idx];
+        const int is_eq = (model.row_sense[row_idx] == 'E');
 
         const double slack_old = slack[row_idx];
         const double slack_new = slack_old - coef * delta;

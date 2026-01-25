@@ -5,48 +5,43 @@ GpuModel::GpuModel(const MIPInstance& mip) {
     auto row_matrix = mip.rows;
     auto col_matrix = mip.cols;
 
-    objective = copyinit_to_device(mip.obj);
-    lb = copyinit_to_device(mip.lb);
-    ub = copyinit_to_device(mip.ub);
+    objective = mip.obj;
 
-    // is_integer = mip.is_integer TODO
-    var_type = copyinit_to_device(mip.xtype);
+    lb = mip.lb;
+    ub = mip.ub;
 
-    // bool* is_integer;
-    row_val = copyinit_to_device(row_matrix.val);
-    col_idx = copyinit_to_device(row_matrix.ind);
-    // TODO: is there a sentinel value?
-    row_ptr = copyinit_to_device(row_matrix.beg);
+    var_type = mip.xtype;
 
-    row_val_trans = copyinit_to_device(col_matrix.val);
-    col_idx_trans = copyinit_to_device(col_matrix.ind);
-    // TODO: is there a sentinel value?
-    row_ptr_trans = copyinit_to_device(col_matrix.beg);
+#ifndef NDEBUG
+    for (int icol = 0; icol < mip.ncols; ++icol) {
+        FP_ASSERT_IFF(mip.is_integer[icol], mip.xtype[icol] == 'B' || mip.xtype[icol] == 'I');
+    }
+#endif
 
-    rhs = copyinit_to_device(mip.rhs);
-    sense = copyinit_to_device(mip.sense);
-    // is_equality = copyinit_to_device(mip.is_equality);
+    row_val = row_matrix.val;
+    col_idx = row_matrix.ind;
+
+    row_ptr = row_matrix.beg;
+    FP_ASSERT(row_matrix.beg.size() == row_matrix.k + 1 && row_matrix.beg[row_matrix.k] == row_matrix.nnz);
+
+    row_val_trans = col_matrix.val;
+    col_idx_trans = col_matrix.ind;
+    row_ptr_trans = col_matrix.beg;
+    FP_ASSERT(col_matrix.beg.size() == col_matrix.k + 1 && col_matrix.beg[col_matrix.k] == col_matrix.nnz);
+
+    rhs = mip.rhs;
+    row_sense = mip.sense;
+
+#ifndef NDEBUG
+    for (int irow = 0; irow < mip.nrows; ++irow) {
+        FP_ASSERT_IFF(mip.is_equality[irow], mip.sense[irow] == 'E');
+        FP_ASSERT(mip.sense[irow] == 'E' || mip.sense[irow] == 'L');
+    }
+#endif
 
     nrows = mip.nrows;
     ncols = mip.ncols;
 }
 
 GpuModel::~GpuModel() {
-    device_free(objective);
-    device_free(lb);
-    device_free(ub);
-    device_free(var_type);
-
-    // device_free(is_integer);
-
-    device_free(row_val);
-    device_free(col_idx);
-    device_free(row_ptr);
-
-    device_free(row_val_trans);
-    device_free(col_idx_trans);
-    device_free(row_ptr_trans);
-
-    device_free(rhs);
-    device_free(sense);
 }

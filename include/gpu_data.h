@@ -6,27 +6,23 @@
 class GpuModel {
 public:
     /* Variables data. */
-    double* objective;
-    double* lb;
-    double* ub;
-    char* var_type;
-    // TODO:
-    thrust::device_vector<bool> is_integer;
+    thrust::device_vector<double> objective;
+    thrust::device_vector<double> lb;
+    thrust::device_vector<double> ub;
+    thrust::device_vector<char> var_type;
 
     /* CSR */
-    double* row_val;
-    int* col_idx;
-    int* row_ptr;
+    thrust::device_vector<double> row_val;
+    thrust::device_vector<int> col_idx;
+    thrust::device_vector<int> row_ptr;
 
-    double* row_val_trans;
-    int* row_ptr_trans;
-    int* col_idx_trans;
+    thrust::device_vector<double> row_val_trans;
+    thrust::device_vector<int> row_ptr_trans;
+    thrust::device_vector<int> col_idx_trans;
 
     /* We only allow <= and =  rows. */
-    double* rhs;
-    char* sense;
-    // TODO:
-    thrust::device_vector<bool> is_equality;
+    thrust::device_vector<double> rhs;
+    thrust::device_vector<char> row_sense;
 
     int nrows;
     int ncols;
