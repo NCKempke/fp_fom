@@ -261,19 +261,19 @@ class TSP : public Ranker
 
 		for (int irow = 0; irow < data.mip.nRows; ++irow)
 		{
-			if (data.rclass[irow] == RowClass::CLIQUE_EQ)
-				continue;
+			if ((data.rclass[irow] == RowClass::CLIQUE_EQ_N || data.rclass[irow] == RowClass::CLIQUE_EQ || data.rclass[irow] == RowClass::CARD_EQ) && data.mip.rhs[irow] != 0.0) {
+				for (int inz = rowBeg[irow]; inz < rowBeg[irow] + rowCnt[irow]; ++inz)
+				{
+					int jcol = rowInd[inz];
+					FP_ASSERT(data.mip.xtype[jcol] == 'B');
 
-			for (int inz = rowBeg[irow]; inz < rowBeg[irow] + rowCnt[irow]; ++inz)
-			{
-				int jcol = rowInd[inz];
-				assert(data.mip.xtype[jcol] == 'B');
-
-				if (!in_eq_clique[jcol]) {
-					in_eq_clique[jcol] = true;
-					eq_clique_vars.push_back(jcol);
+					if (!in_eq_clique[jcol]) {
+						in_eq_clique[jcol] = true;
+						eq_clique_vars.push_back(jcol);
+					}
 				}
 			}
+
 		}
 
 		// /* Sort the found rows greedily by cost. */
@@ -282,13 +282,13 @@ class TSP : public Ranker
 		// 	return data.mip.obj[i] < data.mip.obj[j];
 		// });
 
-		/* Append rest of the variable in any order. */
+		/* Append rest of the variables in any order. */
 		for (int jcol = 0; jcol < data.mip.ncols; ++jcol) {
-			if (!in_eq_clique[jcol])
+			if (!in_eq_clique[jcol] && data.mip.xtype[jcol] != 'C')
 				eq_clique_vars.push_back(jcol);
 		}
 
-		FP_ASSERT(static_cast<int>(eq_clique_vars.size()) == data.mip.ncols);
+		FP_ASSERT(static_cast<int>(eq_clique_vars.size()) == data.nBinaries + data.nIntegers);
 
 		return eq_clique_vars;
 	}
@@ -1142,13 +1142,16 @@ public:
 	void setup(const Domain &domain, RankerPtr ranker, ValuePtr _chooser) {
 		for (int irow = 0; irow < data.mip.nRows; ++irow)
 		{
-			if ((data.rclass[irow] == RowClass::CLIQUE_EQ_N || data.rclass[irow] == RowClass::CLIQUE_EQ) && data.mip.rhs[irow] != 0.0)
+			if (data.rclass[irow] == RowClass::CLIQUE_EQ_N || data.rclass[irow] == RowClass::CLIQUE_EQ || data.rclass[irow] == RowClass::CARD_EQ)
 			{
-				inflow_requirement.push_back(irow);
-				consoleLog("Adding row {} with rhs {} to inflow rows", irow, data.mip.rhs[irow]);
+				if (data.mip.rhs[irow] != 0.0)
+				{
+					inflow_requirement.push_back(irow);
+					consoleLog("Adding row {} with rhs {} to inflow rows", irow, data.mip.rhs[irow]);
+				}
+				else
+					flow_conservation.push_back(irow);
 			}
-			else
-				flow_conservation.push_back(irow);
 		}
 
 		BranchNew::setup(domain, ranker, _chooser);
