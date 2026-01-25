@@ -12,7 +12,7 @@
 #include "mip.h"
 #include "worker.h"
 #include "dfs.h"
-// #include "gpu_data.h"
+#include "gpu_data.h"
 #include "strategies.h"
 #include "linear_propagator.h"
 #include "table_propagators.h"
@@ -264,7 +264,7 @@ protected:
 	}
 
 
-	void writeSolToFile(const MIPInstance &origMip, const std::vector<double> &sol, double best_obj)
+	void writeSolToFile(const MIPInstance &mip, const std::vector<double> &sol, double best_obj)
 	{
 		if (sol.empty())
 		{
@@ -276,21 +276,20 @@ protected:
 		consoleLog("Writing feasible solution to {}...", solFile);
 		std::ofstream out(solFile);
 		out << fmt::format("=obj= {:.17g}", best_obj);
-		for (int j = 0; j < origMip.ncols; j++)
+		for (int j = 0; j < mip.ncols; j++)
 		{
-			out << fmt::format("{} {:.17g}", origMip.cNames[j], sol[j]) << "\n";
+			out << fmt::format("{} {:.17g}", mip.cNames[j], sol[j]) << "\n";
 		}
 		consoleLog("Done");
 	}
 
-
-
-	MIPModelPtr make_solver()
+	MIPModelPtr make_lp_solver(const MIPInstance& mip)
 	{
+		MIPModelPtr model;
 		if (params.solver == SolverType::CPLEX)
 		{
 #if HAS_CPLEX
-			return std::make_shared<CPXModel>();
+			model = std::make_shared<CPXModel>();
 #else
 			consoleError("CPLEX as solver not available.");
 			return nullptr;
@@ -299,7 +298,7 @@ protected:
 		else if (params.solver == SolverType::XPRESS)
 		{
 #if HAS_XPRESS
-			return std::make_shared<XPRSModel>();
+			model = std::make_shared<XPRSModel>();
 #else
 			consoleError("XPRESS as solver not available.");
 			return nullptr;
@@ -308,7 +307,7 @@ protected:
 		else if (params.solver == SolverType::COPT)
 		{
 #if HAS_COPT
-			return std::make_shared<COPTModel>();
+			model = std::make_shared<COPTModel>();
 #else
 			consoleError("COPT as solver not available.");
 			return nullptr;
@@ -317,7 +316,7 @@ protected:
 		else if (params.solver == SolverType::GUROBI)
 		{
 #if HAS_GUROBI
-			return std::make_shared<GUROBIModel>();
+			model = std::make_shared<GUROBIModel>();
 #else
 			consoleError("COPT as solver not available.");
 			return nullptr;
@@ -328,6 +327,10 @@ protected:
 			consoleError("Solver {} not available; aborting", toString(params.solver));
 			exit(1);
 		}
+
+		pass_lp_to_solver(mip, model);
+
+		return model;
 	}
 
 	void exec() override {
@@ -345,37 +348,20 @@ protected:
 		params.logToConsole();
 		consoleLog("");
 
-		const MIPModelPtr model = make_solver();
-
 		/* Read the model. */
 		consoleLog("Reading the problem.");
 
-		/* Actually read the problem. */
-		MpsParser::loadProblem(args.input[0]);
-		model->readModel(args.input[0]);
+		/* Read the problem; create an LP relaxation solver and build MIPData. */
+		MIPInstance origMip = MpsParser::loadProblem(args.input[0]);
+		MIPModelPtr model = make_lp_solver(origMip);
+		MIPData data(std::move(origMip), model, rankerNeedsCliqueCover(params.ranker));
 
 		consoleInfo("Reading time = {}", gStopWatch().lap());
 		consoleLog("");
-
-		/* Extract original mip data. */
-		MIPInstance origMip = extract(model); // TODO: move further down..
-
-
-		consoleLog("Original Problem:  #rows={} #cols={} #nnz={}", model->nrows(), model->ncols(), model->nnz());
-
-		const bool construct_cliquecover = rankerNeedsCliqueCover(params.ranker);
-		MIPData data(model, construct_cliquecover);
-
-		FP_ASSERT(model);
+		consoleLog("Problem:  #rows={} #cols={} #nnz={}", data.mip.nrows, data.mip.ncols, data.mip.rows.val.size());
 		consoleLog("");
 
-		/* Create LP relaxation. */
-		data.lp = model;
-		data.lp->switchToLP();
-
-		MpsParser::loadProblem(args.input[0]);
-
-		/* Initialized propagators and do one round of propagation. */
+		/* Initialize propagators and do one round of propagation. */
 		const MIPInstance &mip = data.mip;
 		PropagationEngine engine{data};
 		engine.add(PropagatorPtr{new CliquesPropagator{data.cliquetable}});
@@ -393,15 +379,8 @@ protected:
 
 		consoleInfo("LP time = {}", gStopWatch().lap());
 
-		// GpuModel gpu_data(mip);
+		GpuModel gpu_data(mip);
 
-
-		/* Move stuff to GPU. We probably want:
-		 *
-		 * - Problem matrix in CSR and CSC?
-		 * - Matrix bounds.
-		 * - Variable bounds.
-		 */
 		if (params.runPortfolio)
 		{
 			consoleInfo("Running portfolio!");
@@ -425,7 +404,7 @@ protected:
 				consoleInfo("Writing best found solution");
 				auto best_sol = data.solpool.getIncumbent();
 
-				writeSolToFile(origMip, best_sol->x, best_sol->objval);
+				writeSolToFile(data.mip, best_sol->x, best_sol->objval);
 			} else {
 				consoleInfo("Did not find feasible solution; cannot write best sol");
 			}

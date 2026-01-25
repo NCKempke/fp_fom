@@ -389,18 +389,17 @@ int lexComp(const double *s1, const double *s2, int n);
 class SparseMatrix
 {
 public:
-	int k = 0;				 //< number of sparse vectors
-	int U = 0;				 //< index range for vectors
-	int nnz = 0;			 //< total number of nonzeros
-	std::vector<int> beg;	 //< beginning of each vector in data arrays
-	std::vector<int> cnt;	 //< length of each vector
-	std::vector<int> ind;	 //< indices
-	std::vector<double> val; //< values
-	// constructors
-	SparseMatrix() = default;
-	SparseMatrix(std::tuple<int, int, int> row) {
+	int k = 0;					//< number of sparse vectors
+	int U = 0;					//< index range for vectors
+	int nnz = 0;				//< total number of nonzeros
+	std::vector<int> beg; //< beginning of each vector in data arrays (length k +1)
+	std::vector<int> ind;		//< indices
+	std::vector<double> val;	//< values
 
-	}
+	SparseMatrix() {
+		beg.push_back(0);
+	};
+
 	SparseMatrix(std::initializer_list<std::initializer_list<double>> lst)
 	{
 		for (const auto &row : lst)
@@ -410,10 +409,12 @@ public:
 		}
 	}
 	using view_type = SparseVectorViewType<int, double>;
+
 	view_type operator[](int i) const
 	{
-		return view_type(ind.data() + beg[i], val.data() + beg[i], cnt[i]);
+		return view_type(ind.data() + beg[i], val.data() + beg[i], beg[i + 1] - beg[i]);
 	}
+
 	/* Append a new sparse vector to the matrix */
 	void add(SparseMatrix::view_type row);
 	/* Construct the transposed matrix */

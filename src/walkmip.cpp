@@ -115,7 +115,7 @@ void WalkMIP::walk()
 {
 	++n_walk;
 	int n = data.mip.ncols;
-	int m = data.mip.nRows;
+	int m = data.mip.nrows;
 	const auto &sense = data.mip.sense;
 	const Domain &domain = engine.getDomain();
 
@@ -327,7 +327,7 @@ void WalkMIP::walk()
 void WalkMIP::oneOpt()
 {
 	int n = data.mip.ncols;
-	int m = data.mip.nRows;
+	int m = data.mip.nrows;
 	const auto &sense = data.mip.sense;
 
 	// nothing to do if there is some violation

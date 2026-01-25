@@ -556,35 +556,21 @@ void GUROBIModel::rows(SparseMatrix &matrix) const
 
     int nconst = nrows();
     int size;
-    matrix.beg.resize(nconst);
+    matrix.beg.resize(nconst + 1);
     matrix.k = nconst;
     matrix.U = ncols();
     /* see documentation gurobi, the function should be called twice, first time call for identifying nonzero element size */
     GUROBI_CALL(GRBgetconstrs, GRBgetenv(prob), prob, &size, nullptr, nullptr, nullptr, 0, nconst);
     FP_ASSERT(size >= 0); // if size non-positive, should be size = -size;
     matrix.nnz = size;
-    if (size)
-    {
-        matrix.ind.resize(size);
-        matrix.val.resize(size);
-        matrix.cnt.resize(nconst);
-        /* see documentation copt, the second time call for obtaining cols data */
-        GUROBI_CALL(GRBgetconstrs, GRBgetenv(prob), prob, &size, matrix.beg.data(), matrix.ind.data(), matrix.val.data(), 0, nconst);
-        // fill up cnt
-        matrix.cnt.resize(nconst);
-        for (int i = 0; i < (nconst - 1); i++)
-        {
-            matrix.cnt[i] = matrix.beg[i + 1] - matrix.beg[i];
-        }
-        matrix.cnt[nconst - 1] = matrix.nnz - matrix.beg[nconst - 1];
-    }
-    else
-    {
-        matrix.cnt.clear();
-        matrix.ind.clear();
-        matrix.val.clear();
-    }
+
+    matrix.ind.resize(size);
+    matrix.val.resize(size);
+    /* see documentation copt, the second time call for obtaining cols data */
+    GUROBI_CALL(GRBgetconstrs, GRBgetenv(prob), prob, &size, matrix.beg.data(), matrix.ind.data(), matrix.val.data(), 0, nconst);
+    matrix.beg[nconst] = matrix.nnz;
 }
+
 void GUROBIModel::col(int cidx, SparseVector &col, char &type, double &lb, double &ub, double &obj) const
 {
     FP_ASSERT(env && prob);
@@ -595,33 +581,20 @@ void GUROBIModel::cols(SparseMatrix &matrix) const
     FP_ASSERT(env && prob);
     int nvars = ncols();
     int size;
-    matrix.beg.resize(nvars);
+    matrix.beg.resize(nvars + 1);
     matrix.k = nvars;
     matrix.U = nrows();
     /* see documentation gurobi, the function should be called twice, first time call for identifying nonzero element size */
     GUROBI_CALL(GRBgetvars, GRBgetenv(prob), prob, &size, nullptr, nullptr, nullptr, 0, nvars);
     FP_ASSERT(size >= 0); // if size non-positive, should be size = -size;
     matrix.nnz = size;
-    if (size)
-    {
-        matrix.ind.resize(size);
-        matrix.val.resize(size);
-        matrix.cnt.resize(nvars);
-        /* see documentation copt, the second time call for obtaining cols data */
-        GUROBI_CALL(GRBgetvars, GRBgetenv(prob), prob, &size, matrix.beg.data(), matrix.ind.data(), matrix.val.data(), 0, nvars);
-        // fill up cnt
-        for (int j = 0; j < (nvars - 1); j++)
-        {
-            matrix.cnt[j] = matrix.beg[j + 1] - matrix.beg[j];
-        }
-        matrix.cnt[nvars - 1] = matrix.nnz - matrix.beg[nvars - 1];
-    }
-    else
-    {
-        matrix.cnt.clear();
-        matrix.ind.clear();
-        matrix.val.clear();
-    }
+
+    matrix.ind.resize(size);
+    matrix.val.resize(size);
+
+    /* see documentation copt, the second time call for obtaining cols data */
+    GUROBI_CALL(GRBgetvars, GRBgetenv(prob), prob, &size, matrix.beg.data(), matrix.ind.data(), matrix.val.data(), 0, nvars);
+    matrix.beg[nvars] = matrix.nnz;
 }
 
 void GUROBIModel::colNames(std::vector<std::string> &names, int first, int last) const
@@ -936,10 +909,10 @@ MIPModelPtr GUROBIModel::convertToXPRESS()
 
     for (int i_row = 0; i_row < m_row; ++i_row)
     {
-        const int nnz = matrix.cnt[i_row];
         const int row_start = matrix.beg[i_row];
-        const int *row_idx = &matrix.ind[row_start];
-        const double *row_val = &matrix.val[row_start];
+        const int nnz = matrix.beg[i_row + 1] - row_start;
+        const int *row_idx = matrix.ind.data() + row_start;
+        const double *row_val = matrix.val.data() + row_start;
 
         xpress_model->addRow(row_names[i_row], row_idx, row_val, nnz, row_sense[i_row], row_rhs[i_row], rngval[i_row]);
     }
@@ -1004,11 +977,13 @@ MIPModelPtr GUROBIModel::convertToCOPT()
 
     for (int i_row = 0; i_row < m_row; ++i_row)
     {
-        const int nnz = matrix.cnt[i_row];
         const int row_start = matrix.beg[i_row];
-        const int *row_idx = &matrix.ind[row_start];
-        const double *row_val = &matrix.val[row_start];
+        const int nnz = matrix.beg[i_row + 1] - row_start;
+        const int *row_idx = matrix.ind.data() + row_start;
+        const double *row_val = matrix.val.data() + row_start;
 
+		FP_ASSERT(nnz >= 0);
+        FP_ASSERT(row_start + nnz <= matrix.nnz);
         copt_model->addRow(row_names[i_row], row_idx, row_val, nnz, row_sense[i_row], row_rhs[i_row], rngval[i_row]);
     }
 
@@ -1072,11 +1047,13 @@ MIPModelPtr GUROBIModel::convertToCPLEX()
 
     for (int i_row = 0; i_row < m_row; ++i_row)
     {
-        const int nnz = matrix.cnt[i_row];
         const int row_start = matrix.beg[i_row];
-        const int *row_idx = &matrix.ind[row_start];
-        const double *row_val = &matrix.val[row_start];
+        const int nnz = matrix.beg[i_row + 1] - row_start;
+        const int *row_idx = matrix.ind.data() + row_start;
+        const double *row_val = matrix.val.data() + row_start;
 
+		FP_ASSERT(nnz >= 0);
+        FP_ASSERT(row_start + nnz <= matrix.nnz);
         cplex_model->addRow(row_names[i_row], row_idx, row_val, nnz, row_sense[i_row], row_rhs[i_row], rngval[i_row]);
     }
     /* Copy the objective offset. */

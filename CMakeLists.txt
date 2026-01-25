@@ -87,12 +87,13 @@ add_executable(fp_main
   src/fp_main.cpp
 )
 
+target_link_libraries(fp_main fp_lib)
 
 # MIP competition executable
 add_executable(mipcomp_main
   src/mipcomp_main.cpp
-#  src/evolution_search.cu
-#  src/gpu_data.cpp
+  src/evolution_search.cu
+  src/gpu_data.cpp
 )
 
 # TODO: which exactly?

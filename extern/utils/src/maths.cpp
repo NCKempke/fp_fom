@@ -107,14 +107,14 @@ void SparseMatrix::add(SparseMatrix::view_type row)
 	const int* idx = row.idx();
 	const double* coef = row.coef();
 	int size = row.size();
-	beg.push_back((int)ind.size());
-	cnt.push_back(size);
+
+	assert(beg.size() == k + 1);
 	ind.insert(ind.end(), idx, idx + size);
 	val.insert(val.end(), coef, coef + size);
+	beg.push_back((int)ind.size());
 	k++;
 	nnz += size;
 }
-
 
 SparseMatrix SparseMatrix::transpose() const
 {
@@ -125,25 +125,26 @@ SparseMatrix SparseMatrix::transpose() const
 
 	if (!U)  return transposed;
 
+	// TODO: this is not necessary. Cnt can be stored in beg instead.
 	/* compute value counts */
-	transposed.cnt.resize(U);
-	std::fill(transposed.cnt.begin(), transposed.cnt.end(), 0);
+	std::vector<int> cnt_trans(U, 0);
 	for (int i = 0; i < k; i++)
 	{
 		for (const auto& [j,coef]: (*this)[i])
 		{
 			FP_ASSERT((j >= 0) && (j < U));
-			transposed.cnt[j]++;
+			cnt_trans[j]++;
 		}
 	}
 
 	/* compute beg */
-	transposed.beg.resize(U);
+	transposed.beg.resize(U + 1);
 	transposed.beg[0] = 0;
 	for (int j = 1; j < U; j++)
 	{
-		transposed.beg[j] = transposed.beg[j-1] + transposed.cnt[j-1];
+		transposed.beg[j] = transposed.beg[j-1] + cnt_trans[j-1];
 	}
+	transposed.beg[U] = nnz;
 
 	std::vector<int> start = transposed.beg;
 
@@ -162,7 +163,7 @@ SparseMatrix SparseMatrix::transpose() const
 	}
 
 	/* some checks */
-	for (int j = 0; j < (U-1); j++)
+	for (int j = 0; j < U; j++)
 	{
 		FP_ASSERT(start[j] == transposed.beg[j+1]);
 	}

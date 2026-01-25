@@ -168,10 +168,10 @@ class ByDuals : public Ranker
 public:
 	virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) override
 	{
-		std::vector<int> rowsSortedByDual(data.mip.nRows);
+		std::vector<int> rowsSortedByDual(data.mip.nrows);
 		std::vector<int> colsSorted(data.mip.ncols - data.nContinuous);
 
-		FP_ASSERT(data.duals.size() >= data.mip.nRows);
+		FP_ASSERT(data.duals.size() >= data.mip.nrows);
 
 		std::iota(rowsSortedByDual.begin(), rowsSortedByDual.end(), 0);
 
@@ -192,17 +192,16 @@ public:
 
 		const auto &matrix = data.mip.rows;
 		const auto &rowBeg = matrix.beg;
-		const auto &rowCnt = matrix.cnt;
 		const auto &rowInd = matrix.ind;
 
 		FP_ASSERT(data.reduced_costs.size() >= data.mip.ncols);
-		FP_ASSERT(rowBeg.size() == data.mip.nRows);
+		FP_ASSERT(rowBeg.size() == data.mip.nrows);
 
-		for (int iRow = 0; iRow < data.mip.nRows; ++iRow)
+		for (int iRow = 0; iRow < data.mip.nrows; ++iRow)
 		{
 			int nBinInt = 0;
 			/* Extract the unmarked binaries and integers. */
-			for (int iNz = rowBeg[iRow]; iNz < rowBeg[iRow] + rowCnt[iRow]; ++iNz)
+			for (int iNz = rowBeg[iRow]; iNz < rowBeg[iRow + 1]; ++iNz)
 			{
 				const int jCol = rowInd[iNz];
 				FP_ASSERT(0 <= jCol && jCol < data.mip.ncols);
@@ -258,12 +257,11 @@ public:
 
         const auto &matrix = data.mip.rows;
         const auto &rowBeg = matrix.beg;
-        const auto &rowCnt = matrix.cnt;
         const auto &rowInd = matrix.ind;
 
-        FP_ASSERT(data.duals.size() >= data.mip.nRows);
+        FP_ASSERT(data.duals.size() >= data.mip.nrows);
 
-        std::vector<int> rowsSortedByDual(data.mip.nRows);
+        std::vector<int> rowsSortedByDual(data.mip.nrows);
         std::iota(rowsSortedByDual.begin(), rowsSortedByDual.end(), 0);
 
         // Sort rows by dual value
@@ -272,13 +270,13 @@ public:
             return std::fabs(data.duals[i]) > std::fabs(data.duals[j]);
         });
 
-        for (int i = 0; i < data.mip.nRows; ++i)
+        for (int i = 0; i < data.mip.nrows; ++i)
         {
             int iRow = rowsSortedByDual[i];
             int nBinInt = 0;
 
             // Extract unmarked integer/binary variables
-            for (int iNz = rowBeg[iRow]; iNz < rowBeg[iRow] + rowCnt[iRow]; ++iNz)
+            for (int iNz = rowBeg[iRow]; iNz < rowBeg[iRow + 1]; ++iNz)
             {
                 int jCol = rowInd[iNz];
                 if (data.mip.xtype[jCol] == 'C' || marked[jCol])
@@ -484,7 +482,7 @@ public:
 	{
 		// compute score
 		std::vector<int> score(data.mip.ncols);
-		int sentinel = 2 * data.mip.nRows;
+		int sentinel = 2 * data.mip.nrows;
 		for (int var = 0; var < data.mip.ncols; var++)
 		{
 			if (data.mip.xtype[var] == 'C')

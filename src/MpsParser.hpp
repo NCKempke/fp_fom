@@ -25,7 +25,9 @@
 #pragma once
 
 #include <algorithm>
+#include <boost/algorithm/string/predicate.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
+#include <boost/iostreams/filter/gzip.hpp>
 #include <boost/spirit/include/qi.hpp>
 #include <fstream>
 #include <iostream>
@@ -35,7 +37,6 @@
 #include "pdqsort/pdqsort.h"
 #include "maths.h"
 
-#include <boost/iostreams/filter/gzip.hpp>
 #include <sys/stat.h>
 
 const static double INF = 1e20;
@@ -75,35 +76,37 @@ public:
 
         MIPInstance mip;
         mip.ncols = parser.nCols;
-        mip.nRows = parser.nRows;
+        mip.nrows = parser.nrows;
+
         // get obj
         mip.objSense = 1;
         mip.objOffset = parser.objoffset;
         mip.obj.resize(mip.ncols, 0);
         for (auto coeffobj : parser.coeffobj)
             mip.obj[coeffobj.first] = coeffobj.second;
+
         // get col data
-        mip.ub.resize(mip.ncols);
-        mip.ub = parser.ub4cols;
-        mip.lb = parser.lb4cols;
+        mip.ub = std::move(parser.ub4cols);
+        mip.lb = std::move(parser.lb4cols);
+        mip.is_integer = std::move(parser.is_col_integer);
+        mip.xtype = std::move(parser.col_type);
 
         // get row data
-        mip.is_equality = parser.is_equation;
-        mip.is_integer = parser.is_col_integer;
-        mip.rhs.resize(mip.nRows);
-        mip.rhs = parser.rowrhs;
+        mip.is_equality = std::move(parser.is_equation);
+        mip.sense = std::move(parser.sense);
+        mip.rhs = std::move(parser.rowrhs);
 
+        /* Initialize the problem's column matrix. While doing so, check whether a column's associated row is a >= row. If so, negate that column's entry. After initializing the column matrix, we change all rows from >= to <= and also negate their right hand side. */
         SparseMatrix matrix{};
-        // FP_ASSERT(env && prob);
-        matrix.beg.resize(mip.ncols);
+        matrix.beg.resize(mip.ncols + 1);
         matrix.k = mip.ncols;
 
         matrix.nnz = parser.entries.size();
         matrix.ind.resize(matrix.nnz);
         matrix.val.resize(matrix.nnz);
-        matrix.cnt.resize(mip.ncols);
         matrix.k = mip.ncols;
-        matrix.U = mip.nRows;
+        matrix.U = mip.nrows;
+
         for (size_t i = 0; i < parser.entries.size(); ++i) {
             matrix.val[i] = (std::get<2>(parser.entries[i]));
             matrix.ind[i] = (std::get<1>(parser.entries[i]));
@@ -111,14 +114,12 @@ public:
                 matrix.beg[std::get<0>(parser.entries[i])] = static_cast<int>(i);
             }
         }
-        for (int j = 0; j < (mip.ncols - 1); j++)
-            matrix.cnt[j] = matrix.beg[j + 1] - matrix.beg[j];
-        matrix.cnt[mip.ncols - 1] = matrix.nnz - matrix.beg[mip.ncols - 1];
+        matrix.beg[mip.ncols] = matrix.nnz;
 
-        mip.cols = matrix;
-        mip.rows = matrix.transpose();
-        mip.rNames = parser.rownames;
-        mip.cNames = parser.colnames;
+        mip.cols = std::move(matrix);
+        mip.rows = mip.cols.transpose();
+        mip.rNames = std::move(parser.rownames);
+        mip.cNames = std::move(parser.colnames);
 
         for (const auto &rhs: mip.rhs)
             mip.maxRhs = std::max(std::abs(rhs), mip.maxRhs);
@@ -135,9 +136,9 @@ public:
             const auto type = mip.is_integer[i] ? "integer" : "continuous";
             std::cout << mip.cNames[i] << " " << mip.lb[i] << " " << mip.ub[i] << " " << type << std::endl;
         }
-        for (int i = 0; i < mip.nRows; i++) {
+        for (int i = 0; i < mip.nrows; i++) {
             std::cout << mip.rNames[i] << ": ";
-            for (int j = mip.rows.beg[i]; j < mip.rows.beg[i] + mip.rows.cnt[i]; j++) {
+            for (int j = mip.rows.beg[i]; j < mip.rows.beg[i + 1]; j++) {
                 std::cout << mip.rows.val[j] << " " << mip.cNames[mip.rows.ind[j]] << " + ";
             }
             auto sign = mip.is_equality[i] ? " =" : "<=";
@@ -145,7 +146,6 @@ public:
         }
 #endif
         return mip;
-
     }
 
 private:
@@ -204,14 +204,16 @@ private:
     std::unordered_map<std::string, int> colname2idx;
     std::vector<double> lb4cols;
     std::vector<double> ub4cols;
-    std::vector<BoundType> row_type;
+    std::vector<char> sense;
     std::vector<bool> is_equation;
     std::vector<bool> is_col_integer;
+    std::vector<char> col_type;
+
     double objoffset = 0;
     bool is_objective_negated = false;
 
     int nCols = 0;
-    int nRows = 0;
+    int nrows = 0;
     int nnz = -1;
 
     /// checks first word of strline and wraps it by it_begin and it_end
@@ -223,12 +225,10 @@ private:
     parseDefault(boost::iostreams::filtering_istream &file);
 
     ParseKey
-    parseRows(boost::iostreams::filtering_istream &file,
-              std::vector<BoundType> &rowtype);
+    parseRows(boost::iostreams::filtering_istream &file);
 
     ParseKey
-    parseCols(boost::iostreams::filtering_istream &file,
-              const std::vector<BoundType> &rowtype);
+    parseCols(boost::iostreams::filtering_istream &file);
 
     ParseKey
     parseRhs(boost::iostreams::filtering_istream &file);
@@ -328,12 +328,10 @@ MpsParser::parseDefault(boost::iostreams::filtering_istream &file) {
 }
 
 inline ParseKey
-MpsParser::parseRows(boost::iostreams::filtering_istream &file,
-                     std::vector<BoundType> &rowtype) {
+MpsParser::parseRows(boost::iostreams::filtering_istream &file) {
     using namespace boost::spirit;
 
     std::string strline;
-    size_t nrows = 0;
     bool hasobj = false;
 
     while (getline(file, strline)) {
@@ -344,7 +342,6 @@ MpsParser::parseRows(boost::iostreams::filtering_istream &file,
 
         // start of new section?
         if (key != kNone) {
-            nRows = static_cast<int>(nrows);
             if (!hasobj) {
                 std::cout << "WARNING: no objective row found" << std::endl;
                 rowname2idx.emplace("artificial_empty_objective", -1);
@@ -354,21 +351,17 @@ MpsParser::parseRows(boost::iostreams::filtering_istream &file,
         }
 
         if (word_ref.front() == 'G') {
-            assert(false);
-            // rowlhs.push_back(-INF);
-            rowrhs.push_back(INF);
-            // is_equation.emplace_back( RowFlag::kRhsInf );
-            rowtype.push_back(kGE);
-        } else if (word_ref.front() == 'E') {
-            // rowlhs.push_back(INF);
             rowrhs.push_back(0);
-            is_equation.emplace_back(true);
-            // rowtype.push_back( BoundType::kEq );
-        } else if (word_ref.front() == 'L') {
-            // rowlhs.push_back(INF);
-            rowrhs.push_back(0);
+            sense.push_back('G');
             is_equation.emplace_back(false);
-            // rowtype.push_back( BoundType::kLE );
+        } else if (word_ref.front() == 'E') {
+            rowrhs.push_back(0);
+            sense.push_back('E');
+            is_equation.emplace_back(true);
+        } else if (word_ref.front() == 'L') {
+            rowrhs.push_back(0);
+            sense.push_back('L');
+            is_equation.emplace_back(false);
         }
         // todo properly treat multiple free rows
         else if (word_ref.front() == 'N') {
@@ -410,8 +403,7 @@ MpsParser::parseRows(boost::iostreams::filtering_istream &file,
 }
 
 inline ParseKey
-MpsParser::parseCols(boost::iostreams::filtering_istream &file,
-                     const std::vector<BoundType> &rowtype) {
+MpsParser::parseCols(boost::iostreams::filtering_istream &file) {
     using namespace boost::spirit;
 
     std::string colname;
@@ -502,13 +494,15 @@ MpsParser::parseCols(boost::iostreams::filtering_istream &file,
 
             is_col_integer.emplace_back(integral_cols);
 
-            // initialize with default bounds
+            // initialize with default bounds; initialize integral cols with 'I'; we later change that to 'B' when adding bounds
             if (integral_cols) {
                 lb4cols.push_back(-INF);
                 ub4cols.push_back(INF);
+                col_type.emplace_back('I');
             } else {
                 lb4cols.push_back(-INF);
                 ub4cols.push_back(INF);
+                col_type.emplace_back('C');
             }
 
             assert(is_col_integer.size() == lb4cols.size());
@@ -569,7 +563,7 @@ MpsParser::parseRanges(boost::iostreams::filtering_istream &file) {
             assert(mit != rowname2idx.end());
             rowidx = mit->second;
 
-            assert(rowidx >= 0 && rowidx < nRows);
+            assert(rowidx >= 0 && rowidx < nrows);
         };
 
         auto addrange = [&rowidx, this](std::string sval) {
@@ -581,7 +575,7 @@ MpsParser::parseRanges(boost::iostreams::filtering_istream &file) {
             double val = result.second;
             assert(static_cast<size_t>( rowidx ) < rowrhs.size());
 
-            assert(false);
+            assert(false && "Does not support ranges");
             // if (row_type[rowidx] == kGE) {
             //     assert(false);
             //     // is_equation[rowidx].unset( RowFlag::kRhsInf );
@@ -649,7 +643,7 @@ MpsParser::parseRhs(boost::iostreams::filtering_istream &file) {
             rowidx = mit->second;
 
             assert(rowidx >= -1);
-            assert(rowidx < nRows);
+            assert(rowidx < nrows);
         };
 
         auto addrhs = [&rowidx, this](std::string sval) {
@@ -789,16 +783,14 @@ MpsParser::parseBounds(boost::iostreams::filtering_istream &file) {
                 if (islb)
                     lb4cols[colidx] = {0.0};
                 if (isub) {
-                    // is_col_integer[colidx].unset(ColFlag::kUbInf);
                     ub4cols[colidx] = {1.0};
                 }
                 is_col_integer[colidx] = true;
+                col_type[colidx] = 'B';
             } else {
                 if (islb)
-                    // is_col_integer[colidx].set(ColFlag::kLbInf);
                     lb4cols[colidx] = -INF;
                 if (isub)
-                    // is_col_integer[colidx].set(ColFlag::kUbInf);
                     ub4cols[colidx] = INF;
             }
             continue;
@@ -815,23 +807,22 @@ MpsParser::parseBounds(boost::iostreams::filtering_istream &file) {
             if (islb) {
                 lb4cols[colidx] = val;
                 lb_is_default[colidx] = false;
-                // is_col_integer[colidx].unset(ColFlag::kLbInf);
             }
             if (isub) {
                 ub4cols[colidx] = val;
                 ub_is_default[colidx] = false;
-                // is_col_integer[colidx].unset(ColFlag::kUbInf);
             }
 
-            if (isintegral)
+            if (isintegral) {
                 is_col_integer[colidx] = true;
 
-            if (is_col_integer[colidx]) {
-                is_col_integer[colidx] = true;
                 if (!islb && lb_is_default[colidx])
                     lb4cols[colidx] = 0.0;
                 if (!isub && ub_is_default[colidx])
                     ub4cols[colidx] = INF;
+
+                if (lb4cols[colidx] == 0.0 && ub4cols[colidx] == 1.0)
+                    col_type[colidx] = 'B';
             }
         };
 
@@ -857,21 +848,9 @@ MpsParser::parseFile(const std::string &filename) {
     if (!file)
         return false;
 
-//     if (boost::algorithm::ends_with(filename, ".gz")) {
-// #ifdef PAPILO_USE_BOOST_IOSTREAMS_WITH_ZLIB
-//       in.push( boost::iostreams::gzip_decompressor() );
-// #else
-//         fmt::print("Boost iostreams required to read gz-compressed files.");
-//         return false;
-// #endif
-//     } else if (boost::algorithm::ends_with(filename, ".bz2")) {
-// #ifdef PAPILO_USE_BOOST_IOSTREAMS_WITH_BZIP2
-//       in.push( boost::iostreams::bzip2_decompressor() );
-// #else
-//         fmt::print("Boost iostreams required to read bz2-compressed files.");
-//         return false;
-// #endif
-//     }
+    if (boost::algorithm::ends_with(filename, ".gz")) {
+      in.push( boost::iostreams::gzip_decompressor() );
+    }
 
     in.push(file);
 
@@ -908,10 +887,10 @@ MpsParser::parse(boost::iostreams::filtering_istream &file) {
         keyword_old = keyword;
         switch (keyword) {
             case kRows:
-                keyword = parseRows(file, row_type);
+                keyword = parseRows(file);
                 break;
             case kCols:
-                keyword = parseCols(file, row_type);
+                keyword = parseCols(file);
                 break;
             case kRhs:
                 keyword = parseRhs(file);
@@ -941,10 +920,10 @@ MpsParser::parse(boost::iostreams::filtering_istream &file) {
         return false;
     }
 
-    assert(rowrhs.size() == static_cast<unsigned>( nRows ));
+    assert(rowrhs.size() == static_cast<unsigned>( nrows ));
 
     nCols = colname2idx.size();
-    nRows = rowname2idx.size() - 1; // subtract obj row
+    nrows = rowname2idx.size() - 1; // subtract obj row
 
     return true;
 }

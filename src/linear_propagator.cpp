@@ -37,7 +37,7 @@ LinearPropagator::State LinearPropagator::computeState(const Domain &domain, Spa
 
 void LinearPropagator::init(const Domain &domain)
 {
-	int m = data.mip.nRows;
+	int m = data.mip.nrows;
 	states.resize(m);
 	for (int i = 0; i < m; i++)
 		states[i] = computeState(domain, data.mip.rows[i]);
@@ -282,7 +282,7 @@ void LinearPropagator::propagate(PropagationEngine &engine, Domain::iterator mar
 	if (initialProp)
 	{
 		/* Enqueue all rows */
-		for (int i = 0; i < data.mip.nRows; i++)
+		for (int i = 0; i < data.mip.nrows; i++)
 			qrows.push(i);
 	}
 	else

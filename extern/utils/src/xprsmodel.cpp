@@ -730,29 +730,14 @@ void XPRSModel::rows(SparseMatrix &matrix) const
 	FP_ASSERT(size >= 0);
 	matrix.nnz = size;
 	// get actual data
-	if (size)
-	{
-		matrix.ind.resize(size);
-		matrix.val.resize(size);
-		int nnz;
-		XPRS_CALL(XPRSgetrows, prob,
-				  matrix.beg.data(), matrix.ind.data(), matrix.val.data(),
-				  size, &nnz, 0, m - 1);
-		FP_ASSERT(nnz == size);
-		// fill up cnt
-		matrix.cnt.resize(m);
-		for (int i = 0; i < (m - 1); i++)
-		{
-			matrix.cnt[i] = matrix.beg[i + 1] - matrix.beg[i];
-		}
-		matrix.cnt[m - 1] = matrix.nnz - matrix.beg[m - 1];
-	}
-	else
-	{
-		matrix.cnt.clear();
-		matrix.ind.clear();
-		matrix.val.clear();
-	}
+	matrix.ind.resize(size);
+	matrix.val.resize(size);
+	int nnz;
+	XPRS_CALL(XPRSgetrows, prob,
+			  matrix.beg.data(), matrix.ind.data(), matrix.val.data(),
+			  size, &nnz, 0, m - 1);
+	FP_ASSERT(nnz == size);
+	FP_ASSERT(matrix.beg[m] == nnz);
 }
 
 void XPRSModel::col(int cidx, SparseVector &col, char &type, double &lb, double &ub, double &obj) const
@@ -800,29 +785,15 @@ void XPRSModel::cols(SparseMatrix &matrix) const
 	FP_ASSERT(size >= 0);
 	matrix.nnz = size;
 	// get actual data
-	if (size)
-	{
-		matrix.ind.resize(size);
-		matrix.val.resize(size);
-		int nnz;
-		XPRS_CALL(XPRSgetcols, prob,
-				  matrix.beg.data(), matrix.ind.data(), matrix.val.data(),
-				  size, &nnz, 0, n - 1);
-		FP_ASSERT(nnz == size);
-		// fill up cnt
-		matrix.cnt.resize(n);
-		for (int j = 0; j < (n - 1); j++)
-		{
-			matrix.cnt[j] = matrix.beg[j + 1] - matrix.beg[j];
-		}
-		matrix.cnt[n - 1] = matrix.nnz - matrix.beg[n - 1];
-	}
-	else
-	{
-		matrix.cnt.clear();
-		matrix.ind.clear();
-		matrix.val.clear();
-	}
+
+	matrix.ind.resize(size);
+	matrix.val.resize(size);
+	int nnz;
+	XPRS_CALL(XPRSgetcols, prob,
+			  matrix.beg.data(), matrix.ind.data(), matrix.val.data(),
+			  size, &nnz, 0, n - 1);
+	FP_ASSERT(nnz == size);
+	FP_ASSERT(matrix.beg[n] == nnz);
 }
 
 void XPRSModel::colNames(std::vector<std::string> &names, int first, int last) const

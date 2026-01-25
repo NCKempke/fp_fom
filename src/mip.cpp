@@ -21,7 +21,7 @@ MIPInstance extract(MIPModelPtr model)
 {
 	MIPInstance mip;
 	mip.ncols = model->ncols();
-	mip.nRows = model->nrows();
+	mip.nrows = model->nrows();
 	// get obj
 	mip.objSense = (model->objSense() == ObjSense::MIN) ? 1.0 : -1.0;
 	mip.objOffset = model->objOffset();
@@ -36,9 +36,9 @@ MIPInstance extract(MIPModelPtr model)
 	model->ubs(&(mip.ub[0]));
 	model->cols(mip.cols);
 	// get row data
-	mip.sense.resize(mip.nRows);
+	mip.sense.resize(mip.nrows);
 	model->sense(&(mip.sense[0]));
-	mip.rhs.resize(mip.nRows);
+	mip.rhs.resize(mip.nrows);
 	model->rhs(&(mip.rhs[0]));
 	model->rows(mip.rows);
 	// names
@@ -49,6 +49,38 @@ MIPInstance extract(MIPModelPtr model)
 		mip.maxRhs = std::max(std::abs(rhs), mip.maxRhs);
 	return mip;
 }
+
+/* Input the LP relaxation of a given MIPInstance to the solver stored in MIPModelPtr. */
+void pass_lp_to_solver(const MIPInstance& mip, MIPModelPtr model) {
+    const int n_col = mip.ncols;
+    const int m_row = mip.nrows;
+	const SparseMatrix& matrix = mip.rows;
+
+    /* Copy rows and columns (including objective vlaues). */
+    for (int j_col = 0; j_col < n_col; ++j_col)
+    {
+        FP_ASSERT((mip.xtype[j_col] == 'C') || (mip.xtype[j_col] == 'I') || (mip.xtype[j_col] == 'B'));
+
+        model->addEmptyCol(mip.cNames[j_col], 'C', mip.lb[j_col], mip.ub[j_col], mip.obj[j_col]);
+    }
+
+    for (int i_row = 0; i_row < m_row; ++i_row)
+    {
+        const int row_start = matrix.beg[i_row];
+		const int row_end = matrix.beg[i_row + 1];
+        const int *row_idx = matrix.ind.data() + row_start;
+        const double *row_val = matrix.val.data() + row_start;
+
+		FP_ASSERT(mip.sense[i_row] == 'G' || mip.sense[i_row] == 'L' || mip.sense[i_row] == 'E');
+
+		/* rngval is only required for ranged rows for COPT and CPLEX - we do not use it. */
+        constexpr double rngval = 0.0;
+		model->addRow(mip.rNames[i_row], row_idx, row_val, row_end - row_start, mip.sense[i_row], mip.rhs[i_row], rngval);
+    }
+    /* Copy the objective offset. */
+    model->objOffset(mip.objOffset);
+}
+
 
 /* Checks whether a given solution vector x is feasible */
 bool isSolFeasible(const MIPInstance &mip, std::span<const double> x)
@@ -67,7 +99,7 @@ bool isSolFeasible(const MIPInstance &mip, std::span<const double> x)
 	}
 
 	/* Check constraints with ABS and REL feas tol (since we are usually not running Simplex and cannot hope that the barrier solution will be feasible in absolute tolerances). */
-	for (int i = 0; i < mip.nRows; i++)
+	for (int i = 0; i < mip.nrows; i++)
 	{
 		// compute violation
 		double viol = dotProduct(mip.rows[i], x.data()) - mip.rhs[i];
@@ -253,12 +285,12 @@ static void normalizeRow(MIPInstance &mip, int *vars, double *coefs, int count)
 
 void normalizeRows(MIPInstance &mip)
 {
-	int m = mip.nRows;
+	int m = mip.nrows;
 	for (int i = 0; i < m; i++)
 	{
 		int *vars = &(mip.rows.ind[mip.rows.beg[i]]);
 		double *coefs = &(mip.rows.val[mip.rows.beg[i]]);
-		normalizeRow(mip, vars, coefs, mip.rows.cnt[i]);
+		normalizeRow(mip, vars, coefs, mip.rows.beg[i + 1] - mip.rows.beg[i]);
 	}
 }
 
@@ -642,7 +674,7 @@ RowClass classifyRow(SparseVector::view_type row, char sense, double rhs, std::s
 void rowClassification(MIPData &data)
 {
 	const MIPInstance &mip = data.mip;
-	int m = mip.nRows;
+	int m = mip.nrows;
 	int n = mip.ncols;
 	data.rclass.resize(m);
 
@@ -667,7 +699,7 @@ void computeColLocks(MIPData &data)
 {
 	const MIPInstance &mip = data.mip;
 	int n = mip.ncols;
-	int m = mip.nRows;
+	int m = mip.nrows;
 	data.uplocks.resize(n);
 	data.dnlocks.resize(n);
 	std::fill(data.uplocks.begin(), data.uplocks.end(), 0);
@@ -777,7 +809,7 @@ void constructCliquetable(MIPData &data)
 	FP_ASSERT(data.cliquetable.nCliques() == 0);
 	FP_ASSERT(data.cliquetable.nNonzeros() == 0);
 
-	int m = mip.nRows;
+	int m = mip.nrows;
 	int n = mip.ncols;
 	std::vector<int> clique;
 
@@ -824,7 +856,7 @@ void constructImpltable(MIPData &data)
 	data.impltable.setNcols(mip.ncols);
 	FP_ASSERT(data.impltable.nImpls() == 0);
 
-	int m = mip.nRows;
+	int m = mip.nrows;
 	int n = mip.ncols;
 
 	for (int i = 0; i < m; i++)
@@ -915,6 +947,28 @@ std::vector<double> solveLP(MIPModelPtr model, const Params &params, bool enable
 	}
 
 	return x;
+}
+
+MIPData::MIPData(MIPInstance&& mip_, MIPModelPtr lp_solver, bool build_clique_cover) : mip(std::move(mip_)), lp(lp_solver) {
+	solpool.setObjSense(mip.objSense);
+	dualBound = -INFTY * mip.objSense;
+
+	// normalize rows
+	normalizeRows(mip);
+
+	// row classification
+	rowClassification(*this);
+
+	// variable locks
+	computeColLocks(*this);
+	colStats(*this);
+
+	// global tables
+	constructCliquetable(*this);
+	constructImpltable(*this);
+
+	if (build_clique_cover)
+		constructCliqueCover(*this);
 }
 
 // Init MIP Data from a MIP model

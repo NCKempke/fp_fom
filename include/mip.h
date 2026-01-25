@@ -35,7 +35,7 @@ const double ZEROTOL = 1e-9;
 struct MIPInstance
 {
 	int ncols = 0;
-	int nRows = 0;
+	int nrows = 0;
 	double maxRhs = 0.0;
 	// obj
 	double objSense = 1.0;
@@ -59,6 +59,9 @@ struct MIPInstance
 
 /* Extract instance data from a MIP model */
 MIPInstance extract(MIPModelPtr model);
+
+/* Input the LP relaxation of a given MIPInstance to the solver stored in MIPModelPtr. */
+void pass_lp_to_solver(const MIPInstance& mip, MIPModelPtr model);
 
 /* Checks whether a given solution vector x is feasible */
 bool isSolFeasible(const MIPInstance &mip, std::span<const double> x);
@@ -313,6 +316,8 @@ public:
 struct MIPData
 {
 	MIPData(MIPModelPtr model, bool build_clique_cover);
+	MIPData(MIPInstance&& mip, MIPModelPtr lp_solver, bool build_clique_cover);
+
 	// MIP instance
 	MIPInstance mip;
 	// global structures

@@ -51,6 +51,7 @@ template <typename Func, typename... Args>
 void CPX_CALL(Func cpxfunc, CPXENVptr env, Args &&...args)
 {
 	int status = cpxfunc(env, std::forward<Args>(args)...);
+	FP_ASSERT(!status);
 	if (status)
 		throwCplexError(env, status);
 }
@@ -634,33 +635,19 @@ void CPXModel::rows(SparseMatrix &matrix) const
 	int size;
 	matrix.k = m;
 	matrix.U = ncols();
-	matrix.beg.resize(m);
+	matrix.beg.resize(m + 1);
 	CPXgetrows(env, lp, &tmp, matrix.beg.data(), nullptr, nullptr, 0, &size, 0, m - 1);
 	size = -size;
 	FP_ASSERT(size >= 0);
 	matrix.nnz = size;
+
 	// get coefs
-	if (size)
-	{
-		matrix.ind.resize(size);
-		matrix.val.resize(size);
-		CPX_CALL(CPXgetrows, env, lp, &tmp,
-				 matrix.beg.data(), matrix.ind.data(), matrix.val.data(),
-				 size, &tmp, 0, m - 1);
-		// fill up cnt
-		matrix.cnt.resize(m);
-		for (int i = 0; i < (m - 1); i++)
-		{
-			matrix.cnt[i] = matrix.beg[i + 1] - matrix.beg[i];
-		}
-		matrix.cnt[m - 1] = matrix.nnz - matrix.beg[m - 1];
-	}
-	else
-	{
-		matrix.cnt.clear();
-		matrix.ind.clear();
-		matrix.val.clear();
-	}
+	matrix.ind.resize(size);
+	matrix.val.resize(size);
+	CPX_CALL(CPXgetrows, env, lp, &tmp,
+		matrix.beg.data(), matrix.ind.data(), matrix.val.data(),
+		size, &tmp, 0, m - 1);
+	matrix.beg[m] = matrix.nnz;
 }
 
 void CPXModel::col(int cidx, SparseVector &col, char &type, double &lb, double &ub, double &obj) const
@@ -701,35 +688,21 @@ void CPXModel::cols(SparseMatrix &matrix) const
 	int tmp = 0;
 	int n = ncols();
 	int size;
-	matrix.beg.resize(n);
+	matrix.beg.resize(n + 1);
 	matrix.k = n;
 	matrix.U = nrows();
 	CPXgetcols(env, lp, &tmp, matrix.beg.data(), nullptr, nullptr, 0, &size, 0, n - 1);
 	size = -size;
 	FP_ASSERT(size >= 0);
 	matrix.nnz = size;
+
 	// get coefs
-	if (size)
-	{
-		matrix.ind.resize(size);
-		matrix.val.resize(size);
-		CPX_CALL(CPXgetcols, env, lp, &tmp,
-				 matrix.beg.data(), matrix.ind.data(), matrix.val.data(),
-				 size, &tmp, 0, n - 1);
-		// fill up cnt
-		matrix.cnt.resize(n);
-		for (int j = 0; j < (n - 1); j++)
-		{
-			matrix.cnt[j] = matrix.beg[j + 1] - matrix.beg[j];
-		}
-		matrix.cnt[n - 1] = matrix.nnz - matrix.beg[n - 1];
-	}
-	else
-	{
-		matrix.cnt.clear();
-		matrix.ind.clear();
-		matrix.val.clear();
-	}
+	matrix.ind.resize(size);
+	matrix.val.resize(size);
+	CPX_CALL(CPXgetcols, env, lp, &tmp,
+			 matrix.beg.data(), matrix.ind.data(), matrix.val.data(),
+			 size, &tmp, 0, n - 1);
+	matrix.beg[n] = matrix.nnz;
 }
 
 void CPXModel::colNames(std::vector<std::string> &names, int first, int last) const
@@ -1067,11 +1040,14 @@ MIPModelPtr CPXModel::convertToXPRESS()
 
 	for (int i_row = 0; i_row < m_row; ++i_row)
 	{
-		const int nnz = matrix.cnt[i_row];
 		const int row_start = matrix.beg[i_row];
-		const int *row_idx = &matrix.ind[row_start];
-		const double *row_val = &matrix.val[row_start];
+		const int nnz = matrix.beg[i_row + 1] - row_start;
+		const int *row_idx = matrix.ind.data() + row_start;
+		const double *row_val = matrix.val.data() + row_start;
 
+		FP_ASSERT(nnz >= 0);
+		FP_ASSERT(nnz >= 0);
+        FP_ASSERT(row_start + nnz <= matrix.nnz);
 		xpress_model->addRow(row_names[i_row], row_idx, row_val, nnz, row_sense[i_row], row_rhs[i_row], rngval[i_row]);
 	}
 	/* Copy the objective offset. */
@@ -1135,11 +1111,13 @@ MIPModelPtr CPXModel::convertToCOPT()
 
 	for (int i_row = 0; i_row < m_row; ++i_row)
 	{
-		const int nnz = matrix.cnt[i_row];
 		const int row_start = matrix.beg[i_row];
-		const int *row_idx = &matrix.ind[row_start];
-		const double *row_val = &matrix.val[row_start];
+		const int nnz = matrix.beg[i_row + 1] - row_start;
+		const int *row_idx = matrix.ind.data() + row_start;
+		const double *row_val = matrix.val.data() + row_start;
 
+		FP_ASSERT(nnz >= 0);
+		FP_ASSERT(row_start + nnz <= matrix.nnz);
 		copt_model->addRow(row_names[i_row], row_idx, row_val, nnz, row_sense[i_row], row_rhs[i_row], rngval[i_row]);
 	}
 
@@ -1203,11 +1181,13 @@ MIPModelPtr CPXModel::convertToGUROBI()
 
 	for (int i_row = 0; i_row < m_row; ++i_row)
 	{
-		const int nnz = matrix.cnt[i_row];
 		const int row_start = matrix.beg[i_row];
-		const int *row_idx = &matrix.ind[row_start];
-		const double *row_val = &matrix.val[row_start];
+		const int nnz = matrix.beg[i_row + 1] - row_start;
+		const int *row_idx = matrix.ind.data() + row_start;
+		const double *row_val = matrix.val.data() + row_start;
 
+		FP_ASSERT(nnz >= 0);
+        FP_ASSERT(row_start + nnz <= matrix.nnz);
 		gurobi_model->addRow(row_names[i_row], row_idx, row_val, nnz, row_sense[i_row], row_rhs[i_row], rngval[i_row]);
 	}
 	/* Copy the objective offset. */

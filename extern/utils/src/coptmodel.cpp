@@ -684,26 +684,18 @@ void COPTModel::rows(SparseMatrix &matrix) const
 	int size;
 	matrix.k = m;
 	matrix.U = ncols();
-	matrix.beg.resize(m);
+	matrix.beg.resize(m + 1);
 	/* see documentation copt, the function should be called twice, first time call for identifying size */
 	COPT_API_CALL(COPT_GetRows, prob, m, nullptr, nullptr, nullptr, nullptr, nullptr, tmp, &size);
 	FP_ASSERT(size >= 0); // if size non-positive, should be size = -size;
 	matrix.nnz = size;
-	if (size)
-	{
-		matrix.ind.resize(size);
-		matrix.val.resize(size);
-		matrix.cnt.resize(m);
-		/* see documentation copt, the second time call for obtaining cols data */
-		COPT_API_CALL(COPT_GetRows, prob, m, nullptr, matrix.beg.data(), matrix.cnt.data(), matrix.ind.data(), matrix.val.data(), size, nullptr);
-	}
-	else
-	{
-		matrix.cnt.clear();
-		matrix.ind.clear();
-		matrix.val.clear();
-	}
+
+	matrix.ind.resize(size);
+	matrix.val.resize(size);
+	/* see documentation copt, the second time call for obtaining cols data; leaving rowMatCnt empty returns proper CSR (with sentinel) */
+	COPT_API_CALL(COPT_GetRows, prob, m, nullptr, matrix.beg.data(), nullptr, matrix.ind.data(), matrix.val.data(), size, nullptr);
 }
+
 void COPTModel::col(int cidx, SparseVector &col, char &type, double &lb, double &ub, double &obj) const
 {
 	FP_ASSERT(prob);
@@ -715,27 +707,18 @@ void COPTModel::cols(SparseMatrix &matrix) const
 	int tmp = 0;
 	int n = ncols();
 	int size;
-	matrix.beg.resize(n);
+	matrix.beg.resize(n + 1);
 	matrix.k = n;
 	matrix.U = nrows();
 	/* see documentation copt, the function should be called twice, first time call for identifying size */
 	COPT_API_CALL(COPT_GetCols, prob, n, nullptr, nullptr, nullptr, nullptr, nullptr, tmp, &size);
 	FP_ASSERT(size >= 0); // if size non-positive, should be size = -size;
 	matrix.nnz = size;
-	if (size)
-	{
-		matrix.ind.resize(size);
-		matrix.val.resize(size);
-		matrix.cnt.resize(n);
-		/* see documentation copt, the second time call for obtaining cols data */
-		COPT_API_CALL(COPT_GetCols, prob, n, nullptr, matrix.beg.data(), matrix.cnt.data(), matrix.ind.data(), matrix.val.data(), size, nullptr);
-	}
-	else
-	{
-		matrix.cnt.clear();
-		matrix.ind.clear();
-		matrix.val.clear();
-	}
+
+	matrix.ind.resize(size);
+	matrix.val.resize(size);
+	/* see documentation copt, the second time call for obtaining cols data; leaving colMatCnt empty returns proper CSC (with sentinel) */
+	COPT_API_CALL(COPT_GetCols, prob, n, nullptr, matrix.beg.data(), nullptr, matrix.ind.data(), matrix.val.data(), size, nullptr);
 }
 void COPTModel::colNames(std::vector<std::string> &names, int first, int last) const
 {

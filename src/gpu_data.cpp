@@ -27,7 +27,7 @@ GpuModel::GpuModel(const MIPInstance& mip) {
     sense = copyinit_to_device(mip.sense);
     // is_equality = copyinit_to_device(mip.is_equality);
 
-    nrows = mip.nRows;
+    nrows = mip.nrows;
     ncols = mip.ncols;
 }
 

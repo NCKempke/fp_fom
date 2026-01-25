@@ -218,9 +218,9 @@ void Domain::undo(Domain::iterator mark)
 }
 
 PropagationEngine::PropagationEngine(const MIPData &_data) : data(_data),
-															 minAct(data.mip.nRows),
-															 maxAct(data.mip.nRows),
-															 violated(data.mip.nRows) {}
+															 minAct(data.mip.nrows),
+															 maxAct(data.mip.nrows),
+															 violated(data.mip.nrows) {}
 
 PropagatorPtr PropagationEngine::getPropagator(const std::string &name) const
 {
@@ -246,7 +246,7 @@ void PropagationEngine::init(std::span<const double> _lb, std::span<const double
 	domain.cNames = data.mip.cNames;
 
 	/* Evaluate current mininimum and maximum activities for each row */
-	int m = data.mip.nRows;
+	int m = data.mip.nrows;
 	for (int i = 0; i < m; i++)
 	{
 		recomputeRowActivity(i);
@@ -611,7 +611,7 @@ void PropagationEngine::disableAll()
 /* Compute current violation and set of violated constraints */
 void PropagationEngine::recomputeViolation()
 {
-	int m = data.mip.nRows;
+	int m = data.mip.nrows;
 	violated.clear();
 	totViol = 0.0;
 	for (int i = 0; i < m; i++)
@@ -668,7 +668,7 @@ void PropagationEngine::debugCheckRow(int i) const
 
 void PropagationEngine::debugChecks() const
 {
-	int m = data.mip.nRows;
+	int m = data.mip.nrows;
 	for (int i = 0; i < m; i++)
 		debugCheckRow(i);
 }
