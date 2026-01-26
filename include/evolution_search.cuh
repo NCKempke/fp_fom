@@ -1,16 +1,18 @@
 #pragma once
 
+class MIPInstance;
 class GpuModel;
 
 class EvolutionSearch {
 public:
-    const GpuModel& model;
+    const MIPInstance& model_host;
+    const GpuModel& model_device;
     int n_random_moves = 100000;
     int n_rounds = 10;
 
     /* TODO: GPU solution pool. */
 
-    EvolutionSearch(const GpuModel& model_) : model(model_) {};
+    EvolutionSearch(const MIPInstance& model_host_, const GpuModel& model_device_) : model_host(model_host_), model_device(model_device_) {};
 
     void run();
 };

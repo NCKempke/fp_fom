@@ -1,11 +1,19 @@
 #include "evolution_search.cuh"
+
 #include "gpu_data.cuh"
+#include "mip.h"
 
 #include <consolelog.h>
 
 #include <curand_kernel.h>
 #include <cuda_runtime.h>
 #include <cmath>
+
+#include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
+#include <thrust/extrema.h>
+#include <thrust/execution_policy.h>
+#include <thrust/inner_product.h>
 
 #include "cub/cub.cuh"
 
@@ -19,14 +27,18 @@ struct random_move
 };
 
 /* Large scores are bad. */
-__device__ inline double random_move_score(double objective, double violation)
-{
-    // TODO
-    return objective + violation;
-}
+struct solution_score {
+    double objective = DBL_MAX;
+    double violation = DBL_MAX;
+
+    __host__ __device__ inline double feas_score() const {
+            // TODO
+        return /*objective +*/ violation;
+    }
+};
 
 /* activities = rhs - Ax */
-__device__ void compute_random_move(const GpuModelPtrs &model, curandState &state, const double *slack, const double *sol, double objective, double sum_slack, int col, double &best_score, random_move &best_move, int ncols)
+__device__ void compute_random_move(const GpuModelPtrs &model, curandState &state, const double *slack, const double *sol, double objective, double sum_slack, int col, solution_score &best_score, random_move &best_move, int ncols)
 {
     const int block_idx = blockIdx.x;
     const int thread_idx = threadIdx.x;
@@ -51,10 +63,16 @@ __device__ void compute_random_move(const GpuModelPtrs &model, curandState &stat
     /* Make sure shared memory is visible to all threads in the block. */
     __syncthreads();
 
+    // TODO: fixval != col_val
     const double fixval = static_cast<int>((lb + (ub - lb) * random_val) + 0.5);
     const double delta = fixval - col_val;
     const double delta_obj = delta * obj_coef;
     double slack_change_thread = 0.0;
+
+    // if (thread_idx == 0)
+    // {
+    //     // printf("fixval: %g; colval: %g\n", fixval, col_val);
+    // }
 
     /* Iterate column and compute changes in violation. */
     const int col_beg = model.row_ptr_trans[col];
@@ -88,9 +106,9 @@ __device__ void compute_random_move(const GpuModelPtrs &model, curandState &stat
     /* Write violation to global memory. */
     if (thread_idx == 0)
     {
-        double score = random_move_score(objective + delta_obj, sum_slack + slack_change);
+        solution_score score {objective + delta_obj, sum_slack + slack_change};
 
-        if (score < best_score)
+        if (score.feas_score() < best_score.feas_score())
         {
             best_score = score;
             best_move = {fixval, col};
@@ -101,14 +119,14 @@ __device__ void compute_random_move(const GpuModelPtrs &model, curandState &stat
 }
 
 /* On exit, best_scores and best_random_moves contain for each block the best move and score found by the block. Consequently, best_scores and best_random_moves need to be larger than the grid dimension. */
-__global__ void compute_random_moves_kernel(const GpuModelPtrs model, const double *slack, const double *sol, double objective, double sum_slack, double *best_scores, random_move *best_random_moves, int n_cols, int n_moves)
+__global__ void compute_random_moves_kernel(const GpuModelPtrs model, const double *slack, const double *sol, double objective, double sum_slack, solution_score *best_scores, random_move *best_random_moves, int n_cols, int n_moves)
 {
     const int block_idx = blockIdx.x;
     const int grid_dim = gridDim.x;
     const int thread_idx = threadIdx.x;
     __shared__ curandState state;
     __shared__ random_move best_move;
-    __shared__ double best_score;
+    __shared__ solution_score best_score;
 
     /* Initialize shared memory on thread 0. */
     if (thread_idx == 0)
@@ -116,7 +134,7 @@ __global__ void compute_random_moves_kernel(const GpuModelPtrs model, const doub
         /* Set random seed to 0. */
         curand_init(0, 0, 0, &state);
         best_move = {0.0, -1};
-        best_score = DBL_MAX;
+        best_score = {DBL_MAX, DBL_MAX};
     }
     __syncthreads();
 
@@ -148,19 +166,71 @@ __global__ void compute_random_moves_kernel(const GpuModelPtrs model, const doub
     }
 }
 
+__global__ void apply_move(const GpuModelPtrs model, double *slack, double *sol, double objective, double sum_slack, solution_score* best_score, random_move *best_move, int n_cols)
+{
+    const int thread_idx = threadIdx.x;
+    const double val = best_move->val;
+    const int col = best_move->col;
+
+    const double old_val = sol[col];
+
+    /* Iterate column and apply changes in slack. */
+    const int col_beg = model.row_ptr_trans[col];
+    const int col_end = model.row_ptr_trans[col + 1];
+
+    for (int inz = col_beg + thread_idx; inz < col_end; inz += blockDim.x)
+    {
+        const double coef = model.row_val_trans[inz];
+        const int row_idx = model.col_idx_trans[inz];
+
+        /* slack = rhs - Ax */
+        slack[row_idx] += (old_val - val) * coef;
+    }
+
+    sol[col] = val;
+}
+
+double thrust_dot_product(const thrust::device_vector<double>& a,
+                         const thrust::device_vector<double>& b) {
+    // Check sizes
+    assert(a.size() == b.size());
+
+    // Compute dot product: sum(a[i] * b[i])
+    return thrust::inner_product(
+        thrust::device,
+        a.begin(), a.end(),
+        b.begin(),
+        0.0 /* Init value */
+    );
+}
+
 void EvolutionSearch::run()
 {
-    thrust::device_vector<double> sol(model.ncols, 0.0);
-    auto gpu_model_ptrs = model.get_ptrs();
+    std::vector<double> sol_host(model_host.ncols, 0.0);
+    std::vector<double> slacks_host = model_host.rhs;
+    double sum_slack = 0.0;
+
+    /* Compute slacks_host = slacks_host - Ax = rhs - Ax */
+    model_host.rows.SpMV(-1.0, sol_host.data(), slacks_host.data());
+
+    for (int irow = 0; irow < model_host.nrows; ++irow) {
+        const double slack_row = slacks_host[irow];
+        FP_ASSERT(model_host.sense[irow] == 'L' || model_host.sense[irow] == 'E');
+
+        if (model_host.sense[irow] == 'E' || slack_row < 0.0)
+            sum_slack += fabs(slack_row);
+    }
+
+    thrust::device_vector<double> sol_device = sol_host;
+    auto gpu_model_ptrs = model_device.get_ptrs();
 
     consoleInfo("Starting evolution search on GPU");
 
     // TODO compute slacks, solution objective and violation
-    double objective = DBL_MAX;
-    double sum_slack = DBL_MAX;
-    thrust::device_vector<double> slacks(model.nrows, 0.0);
+    double objective = thrust_dot_product(sol_device, model_device.objective);
+    thrust::device_vector<double> slacks_device = slacks_host;
 
-    thrust::device_vector<double> best_scores(N_BLOCKS_RANDOMMOVE, 0.0);
+    thrust::device_vector<solution_score> best_scores(N_BLOCKS_RANDOMMOVE, {0.0, 0.0});
     thrust::device_vector<random_move> best_random_moves(N_BLOCKS_RANDOMMOVE);
 
     /* Do some rounds:
@@ -178,13 +248,37 @@ void EvolutionSearch::run()
      *
      */
 
+    consoleLog("Initial slack     {}", sum_slack);
+    consoleLog("Initial objective {}", objective);
+
     for (int round = 0; round < n_rounds; ++round)
     {
         /* Compute best move for each block. */
-        compute_random_moves_kernel<<<N_BLOCKS_RANDOMMOVE, BLOCKSIZE_RANDOM_MOVE>>>(gpu_model_ptrs, thrust::raw_pointer_cast(slacks.data()), thrust::raw_pointer_cast(sol.data()), objective, sum_slack, thrust::raw_pointer_cast(best_scores.data()), thrust::raw_pointer_cast(best_random_moves.data()), model.ncols, 1e6);
+        compute_random_moves_kernel<<<N_BLOCKS_RANDOMMOVE, BLOCKSIZE_RANDOM_MOVE>>>(gpu_model_ptrs, thrust::raw_pointer_cast(slacks_device.data()), thrust::raw_pointer_cast(sol_device.data()), objective, sum_slack, thrust::raw_pointer_cast(best_scores.data()), thrust::raw_pointer_cast(best_random_moves.data()), model_host.ncols, 1e6);
+
+        thrust::host_vector<solution_score> host_sols = best_scores;
+
+        for (auto& sol : host_sols) {
+            consoleLog("{} {}", sol.objective, sol.violation);
+        }
 
         /* Reduce best moves to get globally best move. */
+        auto max_iter = thrust::min_element(thrust::device, best_scores.begin(), best_scores.end(), [] __device__ (const solution_score& a, const solution_score& b) {
+            return a.feas_score() < b.feas_score();
+        });
+
+        int min_index = max_iter - best_scores.begin();
+        solution_score score = (*max_iter); // Hidden copy GPU -> CPU
+        double min_value = score.feas_score();
+        consoleLog("(idx, score): {} {}", min_index, min_value);
 
         /* Apply best move. */
+        apply_move<<<1, 1024>>>(gpu_model_ptrs, thrust::raw_pointer_cast(slacks_device.data()), thrust::raw_pointer_cast(sol_device.data()), objective, sum_slack, thrust::raw_pointer_cast(best_scores.data()) + min_index, thrust::raw_pointer_cast(best_random_moves.data()) + min_index, model_host.ncols);
+
+        objective = score.objective;
+        sum_slack = score.violation;
+
+        consoleLog("(objective, sum_slack): {} {}", objective, sum_slack);
+
     }
 };

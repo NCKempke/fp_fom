@@ -171,3 +171,21 @@ SparseMatrix SparseMatrix::transpose() const
 
 	return transposed;
 }
+
+/* Compute y += this * x. */
+void SparseMatrix::SpMV(double alpha, const double* x_vec, double* y_vec) const {
+
+	/* Iterate each row/column for a CSR/CSC matrix. */
+	for (int i_row = 0; i_row < k; ++i_row) {
+		const int inz_start = beg[i_row];
+		const int inz_end = beg[i_row + 1];
+
+		/* Iterate i-th stored row/column and add its dot product with x_vec to y_vec[i_row]. */
+		for (int inz = inz_start; inz < inz_end; ++inz) {
+			const int j_col = ind[inz];
+			const double coef = val[inz];
+
+			y_vec[i_row] += alpha * coef * x_vec[j_col];
+		}
+	}
+}

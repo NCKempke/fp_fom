@@ -435,6 +435,9 @@ public:
 	{
 		return !(*this == other);
 	}
+
+	/* Compute y += alpha * this * x. */
+	void SpMV(double alpha, const double* x_vec, double* y_vec) const;
 };
 
 /**

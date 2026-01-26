@@ -400,7 +400,7 @@ protected:
 		/* Dedicate one process to running the GPU loop. The other processes run FPR-CPU for now. */
 		GpuModel gpu_data(mip);
 
-		EvolutionSearch evo_search(gpu_data);
+		EvolutionSearch evo_search(mip, gpu_data);
 		evo_search.run();
 
 		if (params.runPortfolio)

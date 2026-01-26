@@ -98,12 +98,16 @@ add_executable(mipcomp_main
 )
 
 # TODO: which exactly?
-set_target_properties(mipcomp_main PROPERTIES CUDA_ARCHITECTURES "86;90")
+set_target_properties(mipcomp_main PROPERTIES CUDA_ARCHITECTURES "75")#;86;90")
 set_target_properties(mipcomp_main PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 
 target_compile_options(mipcomp_main PRIVATE
   $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:RelWithDebInfo>>:-lineinfo>
   $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-G;-g>
+)
+
+target_compile_options(mipcomp_main PRIVATE
+  $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>
 )
 
 # Include CCCL headers
