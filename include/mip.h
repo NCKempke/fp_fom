@@ -17,7 +17,9 @@
 #include "cliquetable.h"
 #include "impltable.h"
 #include "lp_algorithm_type.h"
+#include "solpool.h"
 #include "solver_type.h"
+#include "tolerances.h"
 #include "ranker_type.h"
 #include "value_chooser_type.h"
 #include "preset_type.h"
@@ -25,15 +27,6 @@
 #include <maths.h>
 #include <mipmodel.h>
 #include <vector>
-
-constexpr double INFTY = 1e20;
-constexpr double REL_FEASTOL = 1e-6;
-
-/* The two relevant tolerances for the MIP competition. */
-constexpr double ABS_FEASTOL = 1e-6;
-constexpr double ABS_INT_TOL = 1e-5;
-
-constexpr double ZEROTOL = 1e-9;
 
 /* MIP instance data */
 struct MIPInstance
@@ -63,6 +56,9 @@ struct MIPInstance
 
 /* Extract instance data from a MIP model */
 MIPInstance extract(MIPModelPtr model);
+
+/* Construction a solution from a span range */
+SolutionPtr makeFromSpan(const MIPInstance &mip, std::span<const double> x, double objval, bool isFeas = true, double violation = 0.0);
 
 /* Input the LP relaxation of a given MIPInstance to the solver stored in MIPModelPtr. */
 void pass_lp_to_solver(const MIPInstance& mip, MIPModelPtr model);
@@ -100,108 +96,6 @@ inline double rowViol(double minAct, double maxAct, char sense, double rhs)
 
 	return viol;
 }
-
-/* Stores a complete MIP solution (feasible or not) */
-struct Solution
-{
-public:
-	std::vector<double> x;
-	double objval;
-	double absViolation;
-	double relViolation;
-	double timeFound;
-	std::string foundBy; //< which algorithm found this solution
-
-	/* Whether this is a partial solution. For partial solutions remaining x values are set to inf; objval, violation, and iFeas have no meaning when isPartial == true. */
-	bool isPartial;
-	bool isFeas;
-
-	// equality operator
-	bool operator==(const Solution &other) const
-	{
-
-		if (isPartial)
-		{
-			for (int j = 0; j < x.size(); j++)
-			{
-				if (!equal(x[j], other.x[j]))
-					return false;
-			}
-
-			return true;
-		}
-
-		if (!equal(objval, other.objval))
-			return false;
-
-		if (!equal(absViolation, other.absViolation))
-			return false;
-
-		if (isFeas != other.isFeas)
-			return false;
-		if (x.size() != other.x.size())
-			return false;
-		for (int j = 0; j < x.size(); j++)
-		{
-			if (!equal(x[j], other.x[j]))
-				return false;
-		}
-		return true;
-	}
-};
-using SolutionPtr = std::shared_ptr<Solution>;
-
-/* Construction a solution from a span range */
-SolutionPtr makeFromSpan(const MIPInstance &mip, std::span<const double> x, double objval, bool isFeas = true, double violation = 0.0);
-
-/* Stores a pool of MIP solutions (feasible or not).
- *
- * If not empty, the first solution is always the best one
- */
-class SolutionPool
-{
-public:
-	void setObjSense(double sense)
-	{
-		FP_ASSERT((sense == 1.0) || (sense == -1.0));
-		objSense = sense;
-	}
-	void add(SolutionPtr sol);
-	const std::vector<SolutionPtr> &getSols() const { return pool; }
-	bool hasFeas() const
-	{
-		return ((!pool.empty()) && pool[0]->isFeas);
-	}
-	bool hasSols() const
-	{
-		return (!pool.empty());
-	}
-	SolutionPtr getIncumbent() const
-	{
-		return hasFeas() ? pool[0] : SolutionPtr();
-	}
-	double primalBound() const
-	{
-		return hasFeas() ? pool[0]->objval : objSense * INFTY;
-	}
-	double minViolation() const
-	{
-		FP_ASSERT(!pool.empty());
-		return pool[0]->absViolation;
-	}
-	void merge(SolutionPool &other)
-	{
-		for (SolutionPtr sol : other.pool)
-			add(sol);
-		other.pool.clear();
-		FP_ASSERT(!other.hasSols());
-	}
-	void print() const;
-
-protected:
-	double objSense = 1.0;
-	std::vector<SolutionPtr> pool;
-};
 
 /* sort variables within each row by type ('B','I','C') and within each
  * subset by non-increasing absolute value of coefficients.

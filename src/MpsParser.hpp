@@ -79,6 +79,15 @@ public:
         mip.nrows = parser.nrows;
 
         // get obj
+        /* Potentially transform the objective. */
+        if (parser.is_objective_negated) {
+            /* The MPS file contains a MAX objective; negate the objective. */
+            std::transform(parser.coeffobj.begin(), parser.coeffobj.end(), parser.coeffobj.begin(), [](const std::pair<int, double>& objcoef) {
+                return std::make_pair(objcoef.first, -objcoef.second);
+            });
+            parser.is_objective_negated = false;
+        }
+
         mip.objSense = 1;
         mip.objOffset = parser.objoffset;
         mip.obj.resize(mip.ncols, 0);

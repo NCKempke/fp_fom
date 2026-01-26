@@ -14,6 +14,7 @@
 #include "dfs.h"
 #include "strategies.h"
 #include "linear_propagator.h"
+#include "solution.h"
 #include "table_propagators.h"
 #include "tool_app.h"
 #include "thread_pool.h"
@@ -93,10 +94,9 @@ static void runDFS(WorkerDataPtr worker, Params params, int trial)
 	if (!pool.hasFeas() && pool.hasSols())
 	{
 		// load solution into engine
-		SolutionPtr sol = pool.getSols()[0];
-		FP_ASSERT(sol);
+		Solution sol = pool.getSol(0);
 		for (int j = 0; j < n; j++)
-			engine.fix(j, sol->x[j]);
+			engine.fix(j, sol.x[j]);
 		double oldViol = engine.violation();
 		FP_ASSERT(oldViol > 0.0);
 
@@ -113,12 +113,12 @@ static void runDFS(WorkerDataPtr worker, Params params, int trial)
 			std::vector<double> x{domain.lbs().begin(), domain.lbs().end()};
 			double objval = evalObj(mip, x);
 			bool isFeas = isSolFeasible(mip, x);
-			sol = makeFromSpan(mip, x, objval, isFeas, newViol);
+			SolutionPtr solPtr = makeFromSpan(mip, x, objval, isFeas, newViol);
 
-			sol->timeFound = gStopWatch().elapsed();
+			solPtr->timeFound = gStopWatch().elapsed();
 			const std::string strat_name = fmt::format("{}_{}", toString(params.ranker), toString(params.valueChooser));
-			sol->foundBy = strat_name;
-			pool.add(sol);
+			solPtr->foundBy = strat_name;
+			pool.add(solPtr);
 		}
 	}
 
@@ -176,7 +176,7 @@ static void runPortfolio(MIPData &data, const Params &params)
 	consoleLog("");
 	consoleInfo("Heuristics done after {}s [sols={} feas={}]",
 				gStopWatch().elapsed(),
-				solpool.getSols().size(),
+				solpool.n_sols(),
 				solpool.hasFeas());
 }
 
@@ -306,24 +306,23 @@ protected:
 	{
 		std::vector<double> postsolved_sol;
 		double obj = 0.0;
-		SolutionPtr best_sol;
+		Solution best_sol;
 
 		if (data.solpool.hasFeas())
 		{
 			consoleLog("Postsolving incumbent");
 			best_sol = data.solpool.getIncumbent();
-			FP_ASSERT(best_sol);
 		}
 		else
 			consoleInfo("No feasible solution available!");
 
-		if (best_sol != NULL) {
-			obj = best_sol->objval;
+		if (!best_sol.x.empty()) {
+			obj = best_sol.objval;
 
 			if (was_presolved) {
 				consoleLog("Time starting postsolve = {}", gStopWatch().elapsed());
 				gStopWatch().lap();
-				postsolved_sol = model->postsolveSolution(best_sol->x);
+				postsolved_sol = model->postsolveSolution(best_sol.x);
 				consoleLog("Time finished postsolve = {}", gStopWatch().elapsed());
 				consoleInfo("Postsolve time = {}", gStopWatch().lap());
 
@@ -332,7 +331,7 @@ protected:
 				FP_ASSERT(isSolFeasible(origMip, postsolved_sol));
 			} else {
 				consoleLog("No presolve executed; skipping postsolve.");
-				postsolved_sol = best_sol->x;
+				postsolved_sol = std::move(best_sol.x);
 			}
 		}
 

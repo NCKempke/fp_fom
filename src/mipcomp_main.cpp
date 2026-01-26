@@ -15,6 +15,7 @@
 #include "linear_propagator.h"
 #include "mip.h"
 #include "MpsParser.hpp"
+#include "solution.h"
 #include "strategies.h"
 #include "table_propagators.h"
 #include "thread_pool.h"
@@ -96,10 +97,9 @@ static void runDFS(WorkerDataPtr worker, Params params, int trial)
 	if (!pool.hasFeas() && pool.hasSols())
 	{
 		// load solution into engine
-		SolutionPtr sol = pool.getSols()[0];
-		FP_ASSERT(sol);
+		Solution sol = pool.getSol(0);
 		for (int j = 0; j < n; j++)
-			engine.fix(j, sol->x[j]);
+			engine.fix(j, sol.x[j]);
 		double oldViol = engine.violation();
 		FP_ASSERT(oldViol > 0.0);
 
@@ -116,12 +116,12 @@ static void runDFS(WorkerDataPtr worker, Params params, int trial)
 			std::vector<double> x{domain.lbs().begin(), domain.lbs().end()};
 			double objval = evalObj(mip, x);
 			bool isFeas = isSolFeasible(mip, x);
-			sol = makeFromSpan(mip, x, objval, isFeas, newViol);
+			SolutionPtr solptr = makeFromSpan(mip, x, objval, isFeas, newViol);
 
-			sol->timeFound = gStopWatch().elapsed();
+			solptr->timeFound = gStopWatch().elapsed();
 			const std::string strat_name = fmt::format("{}_{}", toString(params.ranker), toString(params.valueChooser));
-			sol->foundBy = strat_name;
-			pool.add(sol);
+			solptr->foundBy = strat_name;
+			pool.add(solptr);
 		}
 	}
 
@@ -179,7 +179,7 @@ static void runPortfolio(MIPData &data, const Params &params)
 	consoleLog("");
 	consoleInfo("Heuristics done after {}s [sols={} feas={}]",
 				gStopWatch().elapsed(),
-				solpool.getSols().size(),
+				solpool.n_sols(),
 				solpool.hasFeas());
 }
 
@@ -426,7 +426,7 @@ protected:
 				consoleInfo("Writing best found solution");
 				auto best_sol = data.solpool.getIncumbent();
 
-				writeSolToFile(data.mip, best_sol->x, best_sol->objval);
+				writeSolToFile(data.mip, best_sol.x, best_sol.objval);
 			} else {
 				consoleInfo("Did not find feasible solution; cannot write best sol");
 			}
