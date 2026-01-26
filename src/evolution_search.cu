@@ -20,7 +20,7 @@
 constexpr int N_BLOCKS_RANDOMMOVE = 512;
 constexpr int BLOCKSIZE_RANDOM_MOVE = 32;
 
-struct random_move
+struct single_col_move
 {
     double val;
     int col;
@@ -38,7 +38,7 @@ struct solution_score {
 };
 
 /* activities = rhs - Ax */
-__device__ void compute_random_move(const GpuModelPtrs &model, curandState &state, const double *slack, const double *sol, double objective, double sum_slack, int col, solution_score &best_score, random_move &best_move, int ncols)
+__device__ void compute_random_move(const GpuModelPtrs &model, curandState &state, const double *slack, const double *sol, double objective, double sum_slack, int col, solution_score &best_score, single_col_move &best_move, int ncols)
 {
     const int block_idx = blockIdx.x;
     const int thread_idx = threadIdx.x;
@@ -119,13 +119,13 @@ __device__ void compute_random_move(const GpuModelPtrs &model, curandState &stat
 }
 
 /* On exit, best_scores and best_random_moves contain for each block the best move and score found by the block. Consequently, best_scores and best_random_moves need to be larger than the grid dimension. */
-__global__ void compute_random_moves_kernel(const GpuModelPtrs model, const double *slack, const double *sol, double objective, double sum_slack, solution_score *best_scores, random_move *best_random_moves, int n_cols, int n_moves)
+__global__ void compute_random_moves_kernel(const GpuModelPtrs model, const double *slack, const double *sol, double objective, double sum_slack, solution_score *best_scores, single_col_move *best_random_moves, int n_cols, int n_moves)
 {
     const int block_idx = blockIdx.x;
     const int grid_dim = gridDim.x;
     const int thread_idx = threadIdx.x;
     __shared__ curandState state;
-    __shared__ random_move best_move;
+    __shared__ single_col_move best_move;
     __shared__ solution_score best_score;
 
     /* Initialize shared memory on thread 0. */
@@ -166,7 +166,7 @@ __global__ void compute_random_moves_kernel(const GpuModelPtrs model, const doub
     }
 }
 
-__global__ void apply_move(const GpuModelPtrs model, double *slack, double *sol, double objective, double sum_slack, solution_score* best_score, random_move *best_move, int n_cols)
+__global__ void apply_move(const GpuModelPtrs model, double *slack, double *sol, double objective, double sum_slack, solution_score* best_score, single_col_move *best_move, int n_cols)
 {
     const int thread_idx = threadIdx.x;
     const double val = best_move->val;
@@ -231,7 +231,7 @@ void EvolutionSearch::run()
     thrust::device_vector<double> slacks_device = slacks_host;
 
     thrust::device_vector<solution_score> best_scores(N_BLOCKS_RANDOMMOVE, {DBL_MAX, DBL_MAX});
-    thrust::device_vector<random_move> best_random_moves(N_BLOCKS_RANDOMMOVE);
+    thrust::device_vector<single_col_move> best_random_moves(N_BLOCKS_RANDOMMOVE);
 
     /* Do some rounds:
      * get starting solutions (somehow zeros; lbs; ubs; lp_sol rounded; fpr solutions ...)
