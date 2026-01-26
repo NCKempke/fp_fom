@@ -3,6 +3,28 @@
 #include "mip.h"
 #include "thrust/device_vector.h"
 
+class GpuModelPtrs {
+public:
+    /* Variables data. */
+    const double* objective;
+    const double* lb;
+    const double* ub;
+    const char* var_type;
+
+    /* CSR */
+    const double* row_val;
+    const int* col_idx;
+    const int* row_ptr;
+
+    const double* row_val_trans;
+    const int* row_ptr_trans;
+    const int* col_idx_trans;
+
+    /* We only allow <= and =  rows. */
+    const double* rhs;
+    const char* row_sense;
+};
+
 class GpuModel {
 public:
     /* Variables data. */
@@ -29,4 +51,6 @@ public:
 
     GpuModel(const MIPInstance& data);
     ~GpuModel();
+
+    GpuModelPtrs get_ptrs() const;
 };

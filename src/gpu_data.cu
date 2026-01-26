@@ -7,6 +7,7 @@ GpuModel::GpuModel(const MIPInstance& mip) {
 
     objective = mip.obj;
 
+    FP_ASSERT(mip.ub.size() == mip.ncols);
     lb = mip.lb;
     ub = mip.ub;
 
@@ -44,4 +45,28 @@ GpuModel::GpuModel(const MIPInstance& mip) {
 }
 
 GpuModel::~GpuModel() {
+}
+
+GpuModelPtrs GpuModel::get_ptrs () const {
+    GpuModelPtrs ptrs;
+
+    ptrs.objective = thrust::raw_pointer_cast(objective.data());
+    ptrs.lb = thrust::raw_pointer_cast(lb.data());
+    ptrs.ub = thrust::raw_pointer_cast(ub.data());
+    ptrs.var_type = thrust::raw_pointer_cast(var_type.data());
+
+    /* CSR */
+    ptrs.row_val = thrust::raw_pointer_cast(row_val.data());
+    ptrs.col_idx = thrust::raw_pointer_cast(col_idx.data());
+    ptrs.row_ptr = thrust::raw_pointer_cast(row_ptr.data());
+
+    ptrs.row_val_trans = thrust::raw_pointer_cast(row_val_trans.data());
+    ptrs.row_ptr_trans = thrust::raw_pointer_cast(row_ptr_trans.data());
+    ptrs.col_idx_trans = thrust::raw_pointer_cast(col_idx_trans.data());
+
+    /* We only allow <= and =  rows. */
+    ptrs.rhs = thrust::raw_pointer_cast(rhs.data());
+    ptrs.row_sense = thrust::raw_pointer_cast(row_sense.data());
+
+    return ptrs;
 }

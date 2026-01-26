@@ -26,7 +26,7 @@ __device__ inline double random_move_score(double objective, double violation)
 }
 
 /* activities = rhs - Ax */
-__device__ void compute_random_move(const GpuModel &model, curandState &state, const double *slack, const double *sol, double objective, double sum_slack, int col, double &best_score, random_move &best_move)
+__device__ void compute_random_move(const GpuModelPtrs &model, curandState &state, const double *slack, const double *sol, double objective, double sum_slack, int col, double &best_score, random_move &best_move, int ncols)
 {
     const int block_idx = blockIdx.x;
     const int thread_idx = threadIdx.x;
@@ -34,7 +34,8 @@ __device__ void compute_random_move(const GpuModel &model, curandState &state, c
     if (block_idx >= col)
         return;
 
-    assert(0 <= col && col < model.ncols);
+    if (col >= ncols)
+        return;
 
     // TODO column must be integer
     double col_val = sol[col];
@@ -100,7 +101,7 @@ __device__ void compute_random_move(const GpuModel &model, curandState &state, c
 }
 
 /* On exit, best_scores and best_random_moves contain for each block the best move and score found by the block. Consequently, best_scores and best_random_moves need to be larger than the grid dimension. */
-__global__ void compute_random_moves_kernel(const GpuModel &model, const double *slack, const double *sol, double objective, double sum_slack, double *best_scores, random_move *best_random_moves, int n_cols, int n_moves)
+__global__ void compute_random_moves_kernel(const GpuModelPtrs model, const double *slack, const double *sol, double objective, double sum_slack, double *best_scores, random_move *best_random_moves, int n_cols, int n_moves)
 {
     const int block_idx = blockIdx.x;
     const int grid_dim = gridDim.x;
@@ -123,19 +124,20 @@ __global__ void compute_random_moves_kernel(const GpuModel &model, const double 
     // TODO: this is not quite exact
     int n_moves_per_block = (n_moves + grid_dim - 1) / grid_dim;
 
-    int my_cols_start = block_idx * n_cols_per_block;
+    int my_cols_start = min(n_cols, block_idx * n_cols_per_block);
     int my_cols_end = min(n_cols, (block_idx + 1) * n_cols_per_block);
-    const int cols_range = my_cols_end - my_cols_start + 1;
+    const int cols_range = my_cols_end - my_cols_start;
 
-    assert(my_cols_start < n_cols or n_moves_per_block == 0);
+    if (my_cols_start >= my_cols_end)
+        return;
 
     for (int move = 0; move < n_moves_per_block; ++move)
     {
-        /* Pick a column in our interval. This is uniformly distributed over [my_cols_start,..,my_cols_end]. */
-        const int col = my_cols_start + static_cast<int>((cols_range * curand_uniform(&state) - 0.5));
+        /* Pick a column in our interval. This is uniformly distributed over [my_cols_start,..,my_cols_end). */
+        const int col = my_cols_start + static_cast<int>((cols_range * curand_uniform(&state)));
 
         /* Compute a move for the picked column. */
-        compute_random_move(model, state, slack, sol, objective, sum_slack, col, best_score, best_move);
+        compute_random_move(model, state, slack, sol, objective, sum_slack, col, best_score, best_move, n_cols);
     }
 
     /* offload the best move and its score the main memory */
@@ -149,6 +151,7 @@ __global__ void compute_random_moves_kernel(const GpuModel &model, const double 
 void EvolutionSearch::run()
 {
     thrust::device_vector<double> sol(model.ncols, 0.0);
+    auto gpu_model_ptrs = model.get_ptrs();
 
     consoleInfo("Starting evolution search on GPU");
 
@@ -178,7 +181,7 @@ void EvolutionSearch::run()
     for (int round = 0; round < n_rounds; ++round)
     {
         /* Compute best move for each block. */
-        compute_random_moves_kernel<<<N_BLOCKS_RANDOMMOVE, BLOCKSIZE_RANDOM_MOVE>>>(model, thrust::raw_pointer_cast(slacks.data()), thrust::raw_pointer_cast(sol.data()), objective, sum_slack, thrust::raw_pointer_cast(best_scores.data()), thrust::raw_pointer_cast(best_random_moves.data()), model.ncols, 1e6);
+        compute_random_moves_kernel<<<N_BLOCKS_RANDOMMOVE, BLOCKSIZE_RANDOM_MOVE>>>(gpu_model_ptrs, thrust::raw_pointer_cast(slacks.data()), thrust::raw_pointer_cast(sol.data()), objective, sum_slack, thrust::raw_pointer_cast(best_scores.data()), thrust::raw_pointer_cast(best_random_moves.data()), model.ncols, 1e6);
 
         /* Reduce best moves to get globally best move. */
 
