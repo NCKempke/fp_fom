@@ -230,7 +230,7 @@ void EvolutionSearch::run()
     double objective = thrust_dot_product(sol_device, model_device.objective);
     thrust::device_vector<double> slacks_device = slacks_host;
 
-    thrust::device_vector<solution_score> best_scores(N_BLOCKS_RANDOMMOVE, {0.0, 0.0});
+    thrust::device_vector<solution_score> best_scores(N_BLOCKS_RANDOMMOVE, {DBL_MAX, DBL_MAX});
     thrust::device_vector<random_move> best_random_moves(N_BLOCKS_RANDOMMOVE);
 
     /* Do some rounds:
