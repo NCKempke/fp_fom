@@ -256,11 +256,11 @@ void EvolutionSearch::run()
         /* Compute best move for each block. */
         compute_random_moves_kernel<<<N_BLOCKS_RANDOMMOVE, BLOCKSIZE_RANDOM_MOVE>>>(gpu_model_ptrs, thrust::raw_pointer_cast(slacks_device.data()), thrust::raw_pointer_cast(sol_device.data()), objective, sum_slack, thrust::raw_pointer_cast(best_scores.data()), thrust::raw_pointer_cast(best_random_moves.data()), model_host.ncols, 1e6);
 
-        thrust::host_vector<solution_score> host_sols = best_scores;
+        // thrust::host_vector<solution_score> host_scores = best_scores;
 
-        for (auto& sol : host_sols) {
-            consoleLog("{} {}", sol.objective, sol.violation);
-        }
+        // for (auto& sol : host_scores) {
+        //     consoleLog("{} {}", sol.objective, sol.violation);
+        // }
 
         /* Reduce best moves to get globally best move. */
         auto max_iter = thrust::min_element(thrust::device, best_scores.begin(), best_scores.end(), [] __device__ (const solution_score& a, const solution_score& b) {
