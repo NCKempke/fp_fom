@@ -94,12 +94,17 @@ target_link_libraries(fp_main fp_lib)
 add_executable(mipcomp_main
   src/mipcomp_main.cpp
   src/evolution_search.cu
-  src/gpu_data.cpp
+  src/gpu_data.cu
 )
 
 # TODO: which exactly?
 set_target_properties(mipcomp_main PROPERTIES CUDA_ARCHITECTURES "86;90")
 set_target_properties(mipcomp_main PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+
+target_compile_options(mipcomp_main PRIVATE
+  $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:RelWithDebInfo>>:-lineinfo>
+  $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-G;-g>
+)
 
 # Include CCCL headers
 target_include_directories(mipcomp_main PRIVATE

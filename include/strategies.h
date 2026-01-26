@@ -13,18 +13,28 @@
 
 #pragma once
 
+#include "branch.h"
 #include "dfs.h"
+#include "floats.h"
 #include "mip.h"
 #include "ranker_type.h"
 #include "value_chooser_type.h"
 
-#include "floats.h"
+#include <consolelog.h>
 
 #include <ctime>
 #include <memory>
 #include <numeric>
 #include <random>
 #include <vector>
+
+/* Policy Class to customize DFS behaviour */
+class DFSStrategy
+{
+public:
+	virtual ~DFSStrategy() {}
+	virtual std::vector<Branch> branch(const Domain &domain, bool nodeInfeas, const Branch &oldBranch) = 0;
+};
 
 /* Policy to sort variables */
 class Ranker

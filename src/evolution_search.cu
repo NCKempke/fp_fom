@@ -1,4 +1,7 @@
 #include "evolution_search.cuh"
+#include "gpu_data.cuh"
+
+#include <consolelog.h>
 
 #include <curand_kernel.h>
 #include <cuda_runtime.h>
@@ -146,6 +149,8 @@ __global__ void compute_random_moves_kernel(const GpuModel &model, const double 
 void EvolutionSearch::run()
 {
     thrust::device_vector<double> sol(model.ncols, 0.0);
+
+    consoleInfo("Starting evolution search on GPU");
 
     // TODO compute slacks, solution objective and violation
     double objective = DBL_MAX;

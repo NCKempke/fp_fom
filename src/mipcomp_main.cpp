@@ -9,17 +9,18 @@
  * Copyright 2025 Nils-Christian Kempke
  */
 
-#include "mip.h"
-#include "worker.h"
 #include "dfs.h"
-#include "gpu_data.h"
-#include "strategies.h"
+#include "evolution_search.cuh"
+#include "gpu_data.cuh"
 #include "linear_propagator.h"
-#include "table_propagators.h"
-#include "tool_app.h"
-#include "thread_pool.h"
-#include "version.h"
+#include "mip.h"
 #include "MpsParser.hpp"
+#include "strategies.h"
+#include "table_propagators.h"
+#include "thread_pool.h"
+#include "tool_app.h"
+#include "version.h"
+#include "worker.h"
 
 #include <consolelog.h>
 #include <fileconfig.h>
@@ -398,6 +399,9 @@ protected:
 
 		/* Dedicate one process to running the GPU loop. The other processes run FPR-CPU for now. */
 		GpuModel gpu_data(mip);
+
+		EvolutionSearch evo_search(mip);
+		evo_search.run();
 
 		if (params.runPortfolio)
 		{

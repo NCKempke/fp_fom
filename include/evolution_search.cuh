@@ -1,16 +1,16 @@
 #pragma once
 
-#include "gpu_data.h"
+class GpuModel;
 
 class EvolutionSearch {
 public:
-    GpuModel model;
+    const GpuModel& model;
     int n_random_moves = 100000;
     int n_rounds = 10;
 
     /* TODO: GPU solution pool. */
 
-    EvolutionSearch(GpuModel model_) : model(model_) {};
+    EvolutionSearch(const GpuModel& model_) : model(model_) {};
 
     void run();
 };

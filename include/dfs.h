@@ -13,26 +13,19 @@
 
 #pragma once
 
+#include "branch.h"
 #include "mip.h"
-#include "tool_app.h"
 #include "propagation.h"
+#include "tool_app.h"
+#include "strategies.h"
 #include "walkmip.h"
+#include "worker.h"
 
 #include <consolelog.h>
 #include <timer.h>
 
 #include <numeric>
 #include <iostream>
-
-struct Branch
-{
-public:
-	Branch() = default;
-	Branch(int i, char s, double b) : index(i), sense(s), bound(b) {}
-	int index = -1; /**< column/clique index */
-	char sense;		/**< 'L','U','B' for lower, upper, both respectively */
-	double bound;	/**< new bound */
-};
 
 /* Node data structure */
 struct Node
@@ -42,14 +35,6 @@ public:
 	Branch branch;
 	Domain::iterator trailp;
 	size_t depth;
-};
-
-/* Policy Class to customize DFS behaviour */
-class DFSStrategy
-{
-public:
-	virtual ~DFSStrategy() {}
-	virtual std::vector<Branch> branch(const Domain &domain, bool nodeInfeas, const Branch &oldBranch) = 0;
 };
 
 /** Perform DFS on a given problem: customization of behaviour is provided via StrategyT */

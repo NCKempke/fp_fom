@@ -1,4 +1,4 @@
-#include "gpu_data.h"
+#include "gpu_data.cuh"
 #include "cuda_memory.cuh"
 
 GpuModel::GpuModel(const MIPInstance& mip) {
