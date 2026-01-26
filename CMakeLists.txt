@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.12)
 
 set(CMAKE_CUDA_COMPILER /usr/local/cuda/bin/nvcc)
-set(CMAKE_CUDA_ARCHITECTURES 89)
+set(CMAKE_CUDA_ARCHITECTURES native)
 
 project(fom-fpr LANGUAGES CXX CUDA)
 
@@ -16,6 +16,7 @@ endif()
 
 set(BOOST_MIN_VERSION 1.65)
 find_package(Boost ${BOOST_MIN_VERSION} REQUIRED iostreams)
+
 
 find_package(Git QUIET)
 if (GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
@@ -97,7 +98,7 @@ add_executable(mipcomp_main
 )
 
 # TODO: which exactly?
-set_target_properties(mipcomp_main PROPERTIES CUDA_ARCHITECTURES "70;75;80;86;90")
+set_target_properties(mipcomp_main PROPERTIES CUDA_ARCHITECTURES "86;90")
 set_target_properties(mipcomp_main PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 
 # Include CCCL headers
