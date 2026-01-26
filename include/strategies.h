@@ -887,7 +887,7 @@ public:
 			value = std::min(value, ub);
 			value = std::max(value, lb);
 
-			FP_ASSERT(isInteger(value) && lb <= value && value <= ub);
+			FP_ASSERT(isInteger(value, ABS_INT_TOL) && lb <= value && value <= ub);
 			fixingVal = value;
 		}
 

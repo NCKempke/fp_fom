@@ -90,39 +90,33 @@ bool isSolFeasible(const MIPInstance &mip, std::span<const double> x)
 	/* Check bounds and integrality with ABS_FEASTOL. */
 	for (int j = 0; j < mip.ncols; j++)
 	{
+		/* x < lb */
 		if (lessThan(x[j], mip.lb[j], ABS_FEASTOL))
 			return false;
+
+		/* ub < x */
 		if (greaterThan(x[j], mip.ub[j], ABS_FEASTOL))
 			return false;
-		if ((mip.xtype[j] != 'C') && !isInteger(x[j]))
+
+		/* x is int ? */
+		if ((mip.xtype[j] != 'C') && !isInteger(x[j], ABS_INT_TOL))
 			return false;
 	}
 
-	/* Check constraints with ABS and REL feas tol (since we are usually not running Simplex and cannot hope that the barrier solution will be feasible in absolute tolerances). */
+	/* Check constraints with feas tol. */
 	for (int i = 0; i < mip.nrows; i++)
 	{
-		// compute violation
+		/* compute violation */
 		double viol = dotProduct(mip.rows[i], x.data()) - mip.rhs[i];
-		if (mip.sense[i] == 'G')
-		{
-			viol = -viol;
-		}
-		else if (mip.sense[i] == 'L')
-		{ /* nothing to do */
-		}
-		else if (mip.sense[i] == 'E')
-		{
-			viol = fabs(viol);
-		}
-		else
-		{
-			FP_ASSERT(false);
-		}
 
-		if (isPositive(viol, ABS_FEASTOL) && isPositive(viol, mip.maxRhs * REL_FEASTOL))
-		{
+		if (mip.sense[i] == 'G')
+			viol = -viol;
+		else if (mip.sense[i] == 'E')
+			viol = fabs(viol);
+
+		/* viol > ABS_FEASTOL */
+		if (isPositive(viol, ABS_FEASTOL))
 			return false;
-		}
 	}
 
 	return true;

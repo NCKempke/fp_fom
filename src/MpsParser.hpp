@@ -125,7 +125,7 @@ public:
             mip.maxRhs = std::max(std::abs(rhs), mip.maxRhs);
 
 
-#define PRINT_PROBLEM
+// #define PRINT_PROBLEM
 
 #ifdef PRINT_PROBLEM
         for (int j = 0; j < mip.ncols; j++)

@@ -333,11 +333,28 @@ protected:
 		return model;
 	}
 
+	void set_mipcomp_params () {
+		params.threads = 8;
+		params.timeLimit = 300;
+
+		params.mipPresolve = false;
+		params.postsolve = false;
+		params.writeSol = true;
+
+		/* Solver settings. */
+		params.solver = SolverType::GUROBI;
+		params.presolver = SolverType::UNKNOWN;
+
+		params.solveLp = true;
+	}
+
 	void exec() override {
 		gStopWatch();
 
-		// read params
 		params.readConfig();
+
+		/* set mip competition default parameters */
+		set_mipcomp_params();
 
 		// log config
 		consoleInfo("[config]");
@@ -379,6 +396,7 @@ protected:
 
 		consoleInfo("LP time = {}", gStopWatch().lap());
 
+		/* Dedicate one process to running the GPU loop. The other processes run FPR-CPU for now. */
 		GpuModel gpu_data(mip);
 
 		if (params.runPortfolio)
