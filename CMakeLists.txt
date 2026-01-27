@@ -1,9 +1,6 @@
 # Common boilerplate
 cmake_minimum_required(VERSION 3.12)
 
-set(CMAKE_CUDA_COMPILER /usr/local/cuda/bin/nvcc)
-set(CMAKE_CUDA_ARCHITECTURES native)
-
 project(fom-fpr LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 20)
