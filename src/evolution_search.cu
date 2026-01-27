@@ -308,7 +308,7 @@ __device__ void compute_mtm_unsat_move(const GpuModelPtrs &model, const double *
     // printf("col %d in row  %d fixed to  %f", row, col, fixval);
     // Project to bounds
     fixval = min(ub, max(lb, fixval));
-    printf("here\n");
+
     /* score is valid only for threadIdx.x == 0 */
     const auto score = compute_score_single_col_move(model, slack, sol, {fixval, col}, objective, sum_slack);
 
@@ -689,10 +689,10 @@ void EvolutionSearch::run()
             nmoves);
 
         /* ----- */
-        thrust::host_vector<solution_score> host_scores = best_scores_single_col;
-        for ( auto &[objective, violation]: host_scores) {
-            consoleLog("{} {}", objective, violation);
-        }
+        // thrust::host_vector<solution_score> host_scores = best_scores_single_col;
+        // for ( auto &[objective, violation]: host_scores) {
+        //     consoleLog("{} {}", objective, violation);
+        // }
 
 
         /* Reduce best moves to get globally best move. */
