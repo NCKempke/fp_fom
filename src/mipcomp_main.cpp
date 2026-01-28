@@ -58,6 +58,7 @@ static const unsigned int MIN_NUMBER_OF_INPUTS = 1;
 static std::vector<std::unique_ptr<std::atomic<bool>>> submit_fpr_workers(MIPData& mip_data, ThreadPool& thread_pool, const std::vector<std::pair<RankerType, ValueChooserType>>& strategies, std::atomic<size_t>& global_counter, const double deadline, int n_workers, const Params& params)
 {
 	std::vector<std::unique_ptr<std::atomic<bool>>> flags;
+
 	flags.reserve(n_workers);
 
 	consoleInfo("Submitting {} fpr cpu workers with deadline {}, current time is {}", n_workers, deadline, gStopWatch().elapsed());
@@ -67,9 +68,11 @@ static std::vector<std::unique_ptr<std::atomic<bool>>> submit_fpr_workers(MIPDat
 	{
 		flags.push_back(std::make_unique<std::atomic<bool>>(false));
 	    auto& flag_ref = *(flags.back()); /* reference to this worker’s flag; to not pass flags as a reference */
+		/* clone solver + LP relaxation */
+		MIPModelPtr lp = mip_data.lp->clone();
 
-		thread_pool.enqueue([&, deadline]{
-			fpr_worker(mip_data, strategies, global_counter, deadline, flag_ref, params);
+		thread_pool.enqueue([&, lp, deadline]{
+			fpr_worker(mip_data, lp, strategies, global_counter, deadline, flag_ref, params);
 		});
 	}
 
@@ -209,6 +212,8 @@ protected:
 		params.mipPresolve = false;
 		params.postsolve = false;
 		params.writeSol = true;
+		params.lpMethod = LpAlgorithmType::FIRST_ORDER_METHOD;
+		params.lpTol = 1e-4;
 
 		/* Solver settings. */
 		params.solver = SolverType::GUROBI;
@@ -273,6 +278,8 @@ protected:
 			{RankerType::TYPE, ValueChooserType::RANDOM_LP}
 		};
 
+		worker_flags = submit_fpr_workers(*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, gStopWatch().elapsed() + 	300, 6, params);
+
 		/* We run in parallel: The root LP using PDLP, 6 CPU fix-and-propagate threads, 1 thread running the GPU evolution search.
 		 *
 		 * We do not start a separate thread for the root LP runs. Rather, this is done on this thread. After the thread finished, the current thread starts checking + writing solutions and maybe adjusts the amount of workers.
@@ -285,8 +292,6 @@ protected:
 			solve_initial_lp(*mip_data);
 
 		consoleInfo("LP time = {}", gStopWatch().lap());
-
-		worker_flags = submit_fpr_workers(*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, gStopWatch().elapsed() + 	300, 6, params);
 
 		// TODO: start evolution search in parallel!
 

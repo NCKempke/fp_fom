@@ -28,7 +28,7 @@
 struct WorkerFprState
 {
 public:
-	WorkerFprState(const MIPData &mipdata_) : mipdata{mipdata_}, engine{mipdata_.mip}
+	WorkerFprState(const MIPData &mipdata_, MIPModelPtr lp_) : mipdata{mipdata_}, engine{mipdata_.mip}, lp(lp_)
 	{
         /* Initialize this worker's propagation engine. */
         const MIPInstance &mip = mipdata.mip;
@@ -36,8 +36,6 @@ public:
 		engine.add(PropagatorPtr{new ImplPropagator{mipdata.impltable}});
 		engine.add(PropagatorPtr{new LinearPropagator{mip}});
 		engine.init(mip.lb, mip.ub, mip.xtype);
-		// clone LP relaxation
-		lp = mipdata.lp->clone();
 	}
 	// data
 	const MIPData &mipdata;
@@ -47,9 +45,9 @@ public:
 	MIPModelPtr lp;
 };
 
-static void fpr_worker (MIPData& mip_data, const std::vector<std::pair<RankerType, ValueChooserType>>& strategies, std::atomic<size_t>& global_index, const double deadline, std::atomic<bool>& should_stop, Params params) {
+static void fpr_worker (MIPData& mip_data, MIPModelPtr lp, const std::vector<std::pair<RankerType, ValueChooserType>>& strategies, std::atomic<size_t>& global_index, const double deadline, std::atomic<bool>& should_stop, Params params) {
     /* Initialize propagation engine and lp solver. */
-    WorkerFprState state(mip_data);
+    WorkerFprState state(mip_data, lp);
     int ith_run = 0;
     bool lp_is_ready = false;
 

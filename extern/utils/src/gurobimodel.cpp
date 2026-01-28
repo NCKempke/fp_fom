@@ -157,6 +157,20 @@ void GUROBIModel::lpopt(char method, double tol, double gapTol)
 
         break;
     }
+    case 'f':
+    {
+        /* PDLP on GPU; no crossover. */
+        intParam(IntParam::Crossover, 0);
+        GUROBI_CALL_ENV(GRBsetintparam, GRBgetenv(prob), GRB_INT_PAR_PDHGGPU, 1);
+
+        /* TODO : make this configurable. */
+        GUROBI_CALL_ENV(GRBsetdblparam, GRBgetenv(prob), GRB_DBL_PAR_PDHGRELTOL, tol);
+        GUROBI_CALL_ENV(GRBsetdblparam, GRBgetenv(prob), GRB_DBL_PAR_PDHGABSTOL, tol);
+        GUROBI_CALL_ENV(GRBsetdblparam, GRBgetenv(prob), GRB_DBL_PAR_PDHGCONVTOL, gapTol);
+
+        GUROBI_CALL_ENV(GRBsetintparam, GRBgetenv(prob), GRB_INT_PAR_METHOD, 6);
+        break;
+    }
     default:
         throw std::runtime_error("Unexpected method for GUROBI lpopt");
     }
@@ -837,6 +851,8 @@ GUROBIModel *GUROBIModel::clone_impl() const
     /* in case of unstaged changes in prob  */
     GRBupdatemodel(prob);
     GRBmodel *cloned = GRBcopymodel(prob);
+
+    FP_ASSERT(cloned);
 
     std::unique_ptr<GUROBIModel> cloned_gurobimodel = std::make_unique<GUROBIModel>(clonedenv, cloned);
     return cloned_gurobimodel.release();
