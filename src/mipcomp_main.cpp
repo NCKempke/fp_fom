@@ -272,6 +272,8 @@ protected:
 		std::vector<std::unique_ptr<std::atomic<bool>>> worker_flags;
 
 		/* Vector containing all FPR strategies we want to run repeatedly. The worker threads iterate this queue and, until timeout, try each strategy (changing the random seed each time/the lp solution can get updated). TODO: extend this! */
+
+		// TODO: we need LP free methods here as well to run until the LP is solved.
 		const static std::vector<std::pair<RankerType, ValueChooserType>> fpr_queue_cpu = {
 			{RankerType::FRAC, ValueChooserType::RANDOM_LP},
 			{RankerType::DUALS, ValueChooserType::RANDOM_LP},
