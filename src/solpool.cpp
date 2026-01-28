@@ -152,6 +152,12 @@ void SolutionPool::add(SolutionPtr sol)
 
     LockGuard lock(*this);
 
+    const bool has_feas = has_feas_unsafe();
+
+    if ((has_feas && sol->objval < pool[0]->objval) || (!has_feas && sol->isFeas))
+        consoleLog("found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}",
+               sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, sol->timeFound, sol->foundBy);
+
     add_unsafe(sol);
 }
 

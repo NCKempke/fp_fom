@@ -26,6 +26,8 @@
 
 #include <maths.h>
 #include <mipmodel.h>
+
+#include <atomic>
 #include <vector>
 
 /* MIP instance data */
@@ -237,6 +239,8 @@ struct MIPData
 	// relaxations
 	MIPModelPtr lp; //< LP relaxation model
 
+	/* The LP solution is computed in parallel. It might not be available yet. If it has become available, lp_solution_ready is set. */
+	std::atomic<bool> lp_solution_ready{false};
 	/* Solution vectors obtained by either Simplex/Bar/FOM.*/
 	std::vector<double> primals;
 	std::vector<double> duals;

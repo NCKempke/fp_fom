@@ -64,6 +64,7 @@ __device__ solution_score compute_score_single_col_move(const GpuModelPtrs &mode
     const double delta_obj = delta * obj_coef;
     double slack_change_thread = 0.0;
 
+    assert(model.lb[col] <= move.val && move.val <= model.ub[col]);
     // if (thread_idx == 0)
     // {
     //     // printf("fixval: %g; colval: %g\n", fixval, col_val);
@@ -158,6 +159,8 @@ __device__ void compute_oneopt_move(const GpuModelPtrs &model, curandState &stat
     /* Only do this for variables with non-zero objective. */
     if ((obj > 0.0 && col_val == lb) || (obj < 0.0 && col_val == ub) || obj == 0.0)
         return;
+
+    assert(lb <= col_val && col_val <= ub);
 
     /* Positive stepsize in objective direction. */
     double stepsize = DBL_MAX;
@@ -339,6 +342,8 @@ __global__ void apply_move(const GpuModelPtrs model, double *slack, double *sol,
 
     const double old_val = sol[col];
 
+    assert(model.lb[col] <= val && val <= model.ub[col]);
+
     /* Iterate column and apply changes in slack. */
     const int col_beg = model.row_ptr_trans[col];
     const int col_end = model.row_ptr_trans[col + 1];
@@ -373,6 +378,10 @@ double thrust_dot_product(const thrust::device_vector<double> &a,
 void EvolutionSearch::run()
 {
     std::vector<double> sol_host(model_host.ncols, 0.0);
+
+    for (int jcol = 0; jcol < model_host.ncols; ++jcol)
+        sol_host[jcol] = max(model_host.lb[jcol], min(sol_host[jcol], model_host.ub[jcol]));
+
     std::vector<double> slacks_host = model_host.rhs;
     double sum_slack = 0.0;
 

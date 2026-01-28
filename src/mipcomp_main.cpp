@@ -11,6 +11,7 @@
 
 #include "dfs.h"
 #include "evolution_search.cuh"
+#include "fpr_worker.h"
 #include "gpu_data.cuh"
 #include "linear_propagator.h"
 #include "mip.h"
@@ -22,7 +23,6 @@
 #include "thread_pool.h"
 #include "tool_app.h"
 #include "version.h"
-#include "worker.h"
 
 #include <consolelog.h>
 #include <fileconfig.h>
@@ -55,162 +55,26 @@
 static const unsigned int MIN_NUMBER_OF_INPUTS = 1;
 std::mutex globalMutex;
 
-static void runDFS(WorkerDataPtr worker, Params params, int trial)
+/* Submit n fix-and-propagate workers continuously attempting to run some fix and propagate. Return's a vector of n_workers stop flags that can be used to cancel a worker. */
+static std::vector<std::unique_ptr<std::atomic<bool>>> submit_fpr_workers(MIPData& mip_data, ThreadPool& thread_pool, const std::vector<std::pair<RankerType, ValueChooserType>>& strategies, std::atomic<size_t>& global_counter, const double deadline, int n_workers, const Params& params)
 {
-	const MIPData &data{worker->mipdata};
-	const MIPInstance &mip{data.mip};
-	PropagationEngine &engine{worker->engine};
-	SolutionPool &pool{worker->solpool};
-	const Domain &domain = engine.getDomain();
-	int n = mip.ncols;
-	FP_ASSERT(n == domain.ncols());
+	std::vector<std::unique_ptr<std::atomic<bool>>> flags;
+	flags.reserve(n_workers);
 
-	params.seed = params.seed + 117 * trial;
-	if (params.maxNodes == -1)
-		params.maxNodes = std::max(params.minNodes, n + 1);
-
-	consoleLog("DFS {}-{} seed={}", toString(params.ranker), toString(params.valueChooser), params.seed);
-
-	// Create ranker and value chooser
-	RankerPtr ranker = makeRanker(params.ranker, params, data);
-	ValuePtr chooser = makeValueChooser(params.valueChooser, params, data);
-	FP_ASSERT(ranker);
-	FP_ASSERT(chooser);
-
-	// Use either old or new branching strategy.
-	std::unique_ptr<DFSStrategy> strategy;
-
-	if (params.useOldBranching)
-	{
-		strategy = std::make_unique<BranchSimple>(data);
-		dynamic_cast<BranchSimple &>(*strategy).setup(domain, ranker, chooser);
-	}
-	else
-	{
-		strategy = std::make_unique<BranchNew>(data);
-		dynamic_cast<BranchNew &>(*strategy).setup(domain, ranker, chooser);
-	}
-
-	Domain::iterator mark = engine.mark();
-	dfsSearch(worker, params, *strategy);
-
-	// final and longer repair if still infeasible
-	if (!pool.hasFeas() && pool.hasSols())
-	{
-		// load solution into engine
-		Solution sol = pool.getSol(0);
-		for (int j = 0; j < n; j++)
-			engine.fix(j, sol.x[j]);
-		double oldViol = engine.violation();
-		FP_ASSERT(oldViol > 0.0);
-
-		consoleLog("Final repair attempt");
-		params.maxRepairSteps *= 5;
-		WalkMIP repair(data, params, engine);
-		repair.walk();
-		double newViol = engine.violation();
-		consoleLog("Final repair outcome: viol {} -> {}", oldViol, newViol);
-
-		// add to pool if the new solution is 'better' w.r.t. to feasibility
-		if (newViol < oldViol)
-		{
-			std::vector<double> x{domain.lbs().begin(), domain.lbs().end()};
-			double objval = evalObj(mip, x);
-			bool isFeas = isSolFeasible(mip, x);
-			SolutionPtr solptr = makeFromSpan(mip, x, objval, isFeas, newViol);
-
-			solptr->timeFound = gStopWatch().elapsed();
-			const std::string strat_name = fmt::format("{}_{}", toString(params.ranker), toString(params.valueChooser));
-			solptr->foundBy = strat_name;
-			pool.add(solptr);
-		}
-	}
-
-	engine.undo(mark);
-}
-
-static void runSingleHeuristicParallel(
-	MIPData &data,
-	WorkerDataManager &wManager,
-	Params params)
-{
-	/* Set parameters according to run type and strategy */
-	consoleLog("Runing {}-{} seed={}", toString(params.ranker), toString(params.valueChooser), params.seed);
-
-	WorkerDataPtr worker = wManager.get();
-
-	/*  Run the heuristic. */
-	runDFS(worker, params, 0);
-
-	/* merge local solution pool into global one */
-	std::lock_guard lock{globalMutex};
-	data.solpool.merge(worker->solpool);
-
-	wManager.release(worker);
-}
-
-/* Run a portfolio of heuristics in parallel. */
-static void runPortfolio(MIPData &data, const Params &params)
-{
-	SolutionPool &solpool{data.solpool};
-
-	WorkerDataManager wManager{data};
-	ThreadPool thpool(params.threads);
-
-	/* We run the rankers frac, duals, random, redcosts, and type with random_lp for now. */
-	const std::vector rankers = {RankerType::FRAC, RankerType::DUALS, RankerType::RANDOM, RankerType::REDCOSTS};
-	const std::vector valueChoosers = {ValueChooserType::RANDOM_LP};
+	consoleInfo("Submitting {} fpr cpu workers with deadline {}, current time is {}", n_workers, deadline, gStopWatch().elapsed());
 
 	/* Run all combinations. */
-	for (auto &ranker : rankers)
+	for (int i = 0; i < n_workers; ++i)
 	{
-		for (auto &valueChooser : valueChoosers)
-		{
-			Params params_copy = params;
-			params_copy.ranker = ranker;
-			params_copy.valueChooser = valueChooser;
+		flags.push_back(std::make_unique<std::atomic<bool>>(false));
+	    auto& flag_ref = *(flags.back()); /* reference to this worker’s flag; to not pass flags as a reference */
 
-			thpool.enqueue([&data, &wManager, params_copy]()
-						   { runSingleHeuristicParallel(data, wManager, params_copy); });
-		}
+		thread_pool.enqueue([&, deadline]{
+			fpr_worker(mip_data, strategies, global_counter, deadline, flag_ref, params);
+		});
 	}
 
-	thpool.wait();
-
-	consoleLog("");
-	consoleInfo("Heuristics done after {}s [sols={} feas={}]",
-				gStopWatch().elapsed(),
-				solpool.n_sols(),
-				solpool.hasFeas());
-}
-
-/* Run user specified heuristic. */
-static void runSingleHeuristic(MIPData &data, const Params &params)
-{
-	SolutionPool &solpool{data.solpool};
-
-	int tries = 0;
-	while (tries < params.maxTries)
-	{
-		const auto worker = std::make_shared<WorkerData>(data);
-		const Domain::iterator mark = worker->engine.mark();
-
-		worker->engine.undo(mark);
-
-		/*  Run the heuristic. */
-		runDFS(worker, params, tries++);
-
-		/* merge local solution pool into global one */
-		data.solpool.merge(worker->solpool);
-
-		/* stop on Ctrl-C or time limit */
-		if (UserBreak)
-			break;
-		if (gStopWatch().elapsed() >= params.timeLimit)
-			break;
-	}
-
-	consoleLog("tries = {}", tries);
+	return flags;
 }
 
 class MyApp : public App
@@ -263,6 +127,9 @@ protected:
 
 		data.lp->dual_sol(data.duals.data());
 		data.lp->reduced_costs(data.reduced_costs.data());
+
+		FP_ASSERT(!data.lp_solution_ready.load());
+		data.lp_solution_ready.store(true);
 	}
 
 
@@ -339,6 +206,7 @@ protected:
 		params.threads = 8;
 		params.timeLimit = 300;
 
+		params.repair = true;
 		params.mipPresolve = false;
 		params.postsolve = false;
 		params.writeSol = true;
@@ -383,28 +251,23 @@ protected:
 	void exec() override {
 		gStopWatch();
 
-		/* Queue containing all FPR strategies we want to run. TODO: extend this! */
-		// ThreadSafeQueue<std::pair<RankerType, ValueChooserType>> fpr_queue_cpu = {
-		// 	{RankerType::FRAC, ValueChooserType::RANDOM_LP},
-		// 	{RankerType::DUALS, ValueChooserType::RANDOM_LP},
-		// 	{RankerType::RANDOM, ValueChooserType::RANDOM_LP},
-		// 	{RankerType::REDCOSTS, ValueChooserType::RANDOM_LP},
-		// 	{RankerType::TYPE, ValueChooserType::RANDOM_LP}
-		// };
+		ThreadPool thread_pool(params.threads);
+		std::atomic<size_t> fpr_counter(0);
+		std::vector<std::unique_ptr<std::atomic<bool>>> worker_flags;
+
+		/* Vector containing all FPR strategies we want to run repeatedly. The worker threads iterate this queue and, until timeout, try each strategy (changing the random seed each time/the lp solution can get updated). TODO: extend this! */
+		std::vector<std::pair<RankerType, ValueChooserType>> fpr_queue_cpu = {
+			{RankerType::FRAC, ValueChooserType::RANDOM_LP},
+			{RankerType::DUALS, ValueChooserType::RANDOM_LP},
+			{RankerType::RANDOM, ValueChooserType::RANDOM_LP},
+			{RankerType::REDCOSTS, ValueChooserType::RANDOM_LP},
+			{RankerType::TYPE, ValueChooserType::RANDOM_LP}
+		};
 
 		auto mip_data = read_config_and_problem();
 
 		/* Initialize propagators and do one round of propagation. */
 		const MIPInstance &mip = mip_data->mip;
-
-		PropagationEngine engine{mip};
-		engine.add(PropagatorPtr{new CliquesPropagator{mip_data->cliquetable}});
-		engine.add(PropagatorPtr{new ImplPropagator{mip_data->impltable}});
-		engine.add(PropagatorPtr{new LinearPropagator{mip}});
-		engine.init(mip.lb, mip.ub, mip.xtype);
-		const Domain &domain = engine.getDomain();
-		bool infeas = engine.propagate(true);
-		FP_ASSERT(!infeas);
 
 		gStopWatch().lap();
 		/* Potentially solve the LP relaxation using PDLP; submit a thread for this!. In the threads, run LP free FPR variants as long as possible. */
@@ -413,29 +276,22 @@ protected:
 
 		consoleInfo("LP time = {}", gStopWatch().lap());
 
+		worker_flags = submit_fpr_workers(*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, gStopWatch().elapsed() + 	300, 6, params);
+
 		/* Dedicate one process to running the GPU loop. The other processes run FPR-CPU for now. */
 		GpuModel gpu_data(mip);
 
+		consoleInfo("Running evo search");
 		EvolutionSearch evo_search(mip, gpu_data);
 		evo_search.run();
 
-		if (params.runPortfolio)
-		{
-			consoleInfo("Running portfolio!");
-			const auto enableOutputOld = params.enableOutput;
-			/* Disable output for the time being to not pollute the command line. */
-			params.enableOutput = false;
-
-			runPortfolio(*mip_data, params);
-
-			params.enableOutput = enableOutputOld;
-		}
-		else
-		{
-			consoleInfo("Running single heuristic!");
-			runSingleHeuristic(*mip_data, params);
+		/* Tell everyone to stop. */
+		consoleInfo("Setting stop flags");
+		for (auto & flag : worker_flags) {
+			(*flag).store(true);
 		}
 
+		thread_pool.wait();
 
 		if (params.writeSol) {
 			if (mip_data->solpool.hasFeas()) {

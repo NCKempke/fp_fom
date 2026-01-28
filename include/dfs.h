@@ -19,7 +19,6 @@
 #include "tool_app.h"
 #include "strategies.h"
 #include "walkmip.h"
-#include "worker.h"
 
 #include <consolelog.h>
 #include <timer.h>
@@ -39,25 +38,22 @@ public:
 
 /** Perform DFS on a given problem: customization of behaviour is provided via StrategyT */
 template <typename StrategyT>
-void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
+void dfsSearch(const MIPData& data, PropagationEngine& engine, SolutionPool& pool, MIPModelPtr lp, const Params &params, StrategyT &&strategy)
 {
-	const MIPData &data{worker->mipdata};
 	const MIPInstance &mip{data.mip};
-	PropagationEngine &engine{worker->engine};
-	SolutionPool &pool{worker->solpool};
 	const Domain &domain = engine.getDomain();
 	int n = mip.ncols;
-	FP_ASSERT(n == domain.ncols());
-	MIPModelPtr lp = worker->lp;
-	FP_ASSERT(lp);
 	int consecutiveInfeas = 0;
 	int maxConsecutiveInfeas = (int)(params.maxConsecutiveInfeas * n);
+
+	FP_ASSERT(lp);
+	FP_ASSERT(n == domain.ncols());
 
 	std::vector<Node> nodes;
 	std::vector<int> allIdx(n);
 	std::iota(allIdx.begin(), allIdx.end(), 0);
 
-	WalkMIP repair(data, params, engine);
+	WalkMIP repair(data.mip, params, engine);
 
 	// push root node
 	Domain::iterator start_mark = engine.mark();
@@ -69,7 +65,10 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 
 	const std::string strat_name = fmt::format("{}_{}", toString(params.ranker), toString(params.valueChooser));
 
-	consoleLog("{}: Time starting DFS = {}", strat_name, gStopWatch().elapsed());
+	if (params.enableOutput) {
+		consoleLog("{}: Time starting DFS = {}", strat_name, gStopWatch().elapsed());
+	}
+
 	gStopWatch().lap();
 
 	auto branch2str = [&](const Branch &br)
@@ -154,8 +153,10 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 
 		if (branches.empty())
 		{
-			consoleLog("{}: {} nodes processed: depth={} violation={} elapsed={}", strat_name,
-					   nodecnt, node.depth, engine.violation(), gStopWatch().elapsed());
+			if (params.enableOutput) {
+				consoleLog("{}: {} nodes processed: depth={} violation={} elapsed={}", strat_name,
+						   nodecnt, node.depth, engine.violation(), gStopWatch().elapsed());
+			}
 
 			/* End of dive */
 
@@ -168,21 +169,30 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 				lp->ubs(allIdx.size(), allIdx.data(), domain.ubs().data());
 
 				// solve LP
-				consoleLog("{}: Time starting LP solve = {}", strat_name, gStopWatch().elapsed());
+				if (params.enableOutput) {
+					consoleLog("{}: Time starting LP solve = {}", strat_name, gStopWatch().elapsed());
+				}
 				lp->intParam(IntParam::Threads, params.threads);
 				lp->logging(params.enableOutput);
 				lp->dblParam(DblParam::TimeLimit, std::max(params.timeLimit - gStopWatch().elapsed(), 0.0));
 
-				consoleInfo("DFS time: {}", gStopWatch().lap());
+				if (params.enableOutput) {
+					consoleInfo("DFS time: {}", gStopWatch().lap());
+				}
 				/* This should be solved with higher precision. We should always use 1e-6 for the tolerances and 1e-8 (default) for the gap! */
 				lp->lpopt(solverChar(params.lpMethodFinal), 1e-6, 1e-8);
-				consoleLog("{}: Time finished LP solve = {}", strat_name, gStopWatch().elapsed());
-				consoleInfo("{}: LP time = {}", strat_name, gStopWatch().lap());
+
+				if (params.enableOutput) {
+					consoleLog("{}: Time finished LP solve = {}", strat_name, gStopWatch().elapsed());
+					consoleInfo("{}: LP time = {}", strat_name, gStopWatch().lap());
+				}
 				lpSolved++;
 
 				if (lp->isPrimalFeas())
 				{
-					consoleLog("{}: LP solved to optimality!", strat_name);
+					if (params.enableOutput) {
+						consoleLog("{}: LP solved to optimality!", strat_name);
+					}
 
 					// looks like we have found a solution
 					std::vector<double> x(n);
@@ -197,7 +207,10 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 						FP_ASSERT(equal(domain.lb(j), domain.ub(j), ABS_FEASTOL));
 					}
 					// FP_ASSERT( engine.violatedRows().empty() );
-					consoleLog("{}: Objective {}", strat_name, evalObj(mip, x));
+					if (params.enableOutput) {
+						consoleLog("{}: Objective {}", strat_name, evalObj(mip, x));
+					}
+
 					if (!engine.violatedRows().empty())
 					{
 						nodeInfeas = true;
@@ -205,7 +218,9 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 				}
 				else
 				{
-					consoleLog("{}: LP relaxation infeasible", strat_name);
+					if (params.enableOutput) {
+						consoleLog("{}: LP relaxation infeasible", strat_name);
+					}
 					nodeInfeas = true;
 				}
 			}
@@ -260,11 +275,13 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 			(gStopWatch().elapsed() >= params.timeLimit) ||
 			UserBreak)
 		{
-			consoleLog("{}: Limits reached", strat_name);
+			if (params.enableOutput) {
+				consoleLog("{}: Limits reached", strat_name);
+			}
 			break;
 		}
 	}
-	if (nodes.empty())
+	if (nodes.empty() && params.enableOutput)
 		consoleLog("{}: Nodes emtpy", strat_name);
 
 	// cleanup
@@ -274,9 +291,89 @@ void dfsSearch(WorkerDataPtr worker, const Params &params, StrategyT &&strategy)
 	lp->lbs(allIdx.size(), allIdx.data(), mip.lb.data());
 	lp->ubs(allIdx.size(), allIdx.data(), mip.ub.data());
 
-	if (lpSolved != 1 && numSolutions != 1) {
+	if (params.enableOutput && lpSolved != 1 && numSolutions != 1) {
 		consoleInfo("DFS time: {}", gStopWatch().lap());
 	}
 
-	consoleLog("{}: Time finish DFS = {}", strat_name, gStopWatch().elapsed());
+	if (params.enableOutput) {
+		consoleLog("{}: Time finish DFS = {}", strat_name, gStopWatch().elapsed());
+	}
+}
+
+static void runDFS(const MIPData& data, PropagationEngine& engine, SolutionPool& pool, MIPModelPtr lp, const Params& params)
+{
+	const MIPInstance &mip{data.mip};
+	const Domain &domain = engine.getDomain();
+	int n = mip.ncols;
+
+	FP_ASSERT(n == domain.ncols());
+	FP_ASSERT(lp != nullptr);
+
+	FP_ASSERT(params.maxNodes != -1);
+
+	// consoleLog("DFS {}-{} seed={}", toString(params.ranker), toString(params.valueChooser), params.seed);
+
+	// Create ranker and value chooser
+	RankerPtr ranker = makeRanker(params.ranker, params, data);
+	ValuePtr chooser = makeValueChooser(params.valueChooser, params, data);
+	FP_ASSERT(ranker);
+	FP_ASSERT(chooser);
+
+	// Use either old or new branching strategy.
+	std::unique_ptr<DFSStrategy> strategy;
+
+	if (params.useOldBranching)
+	{
+		strategy = std::make_unique<BranchSimple>(data);
+		dynamic_cast<BranchSimple &>(*strategy).setup(domain, ranker, chooser);
+	}
+	else
+	{
+		strategy = std::make_unique<BranchNew>(data);
+		dynamic_cast<BranchNew &>(*strategy).setup(domain, ranker, chooser);
+	}
+
+	Domain::iterator mark = engine.mark();
+	dfsSearch(data, engine, pool, lp, params, *strategy);
+
+	// final and longer repair if still infeasible
+	if (!pool.hasFeas() && pool.hasSols())
+	{
+		// load solution into engine
+		Solution sol = pool.getSol(0);
+		for (int j = 0; j < n; j++)
+			engine.fix(j, sol.x[j]);
+		double oldViol = engine.violation();
+		FP_ASSERT(oldViol > 0.0);
+
+		if (params.enableOutput) {
+			consoleLog("Final repair attempt");
+		}
+		const int final_repair_steps = params.maxRepairSteps * 5;
+		WalkMIP repair(data.mip, params, engine);
+		repair.set_max_steps(final_repair_steps);
+
+		repair.walk();
+		double newViol = engine.violation();
+		if (params.enableOutput) {
+			consoleLog("Final repair outcome: viol {} -> {}", oldViol, newViol);
+		}
+
+		// add to pool if the new solution is 'better' w.r.t. to feasibility
+		if (newViol < oldViol)
+		{
+
+			std::vector<double> x{domain.lbs().begin(), domain.lbs().end()};
+			double objval = evalObj(mip, x);
+			bool isFeas = isSolFeasible(mip, x);
+			SolutionPtr solPtr = makeFromSpan(mip, x, objval, isFeas, newViol);
+
+			solPtr->timeFound = gStopWatch().elapsed();
+			const std::string strat_name = fmt::format("{}_{}", toString(params.ranker), toString(params.valueChooser));
+			solPtr->foundBy = strat_name;
+			pool.add(solPtr);
+		}
+	}
+
+	engine.undo(mark);
 }
