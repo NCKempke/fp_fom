@@ -496,10 +496,10 @@ protected:
 
 		/* Initialized propagators and do one round of propagation. */
 		const MIPInstance &mip = data.mip;
-		PropagationEngine engine{data};
+		PropagationEngine engine{mip};
 		engine.add(PropagatorPtr{new CliquesPropagator{data.cliquetable}});
 		engine.add(PropagatorPtr{new ImplPropagator{data.impltable}});
-		engine.add(PropagatorPtr{new LinearPropagator{data}});
+		engine.add(PropagatorPtr{new LinearPropagator{mip}});
 		engine.init(mip.lb, mip.ub, mip.xtype);
 		const Domain &domain = engine.getDomain();
 		bool infeas = engine.propagate(true);

@@ -6,7 +6,7 @@
 #include "linear_propagator.h"
 #include <consolelog.h>
 
-LinearPropagator::LinearPropagator(const MIPData &_data) : PropagatorI{}, data{_data} {}
+LinearPropagator::LinearPropagator(const MIPInstance& mip_) : PropagatorI{}, mip{mip_} {}
 
 /* Compute activities for a given row */
 LinearPropagator::State LinearPropagator::computeState(const Domain &domain, SparseMatrix::view_type row) const
@@ -37,10 +37,10 @@ LinearPropagator::State LinearPropagator::computeState(const Domain &domain, Spa
 
 void LinearPropagator::init(const Domain &domain)
 {
-	int m = data.mip.nrows;
+	int m = mip.nrows;
 	states.resize(m);
 	for (int i = 0; i < m; i++)
-		states[i] = computeState(domain, data.mip.rows[i]);
+		states[i] = computeState(domain, mip.rows[i]);
 
 	/* Rows are normalized: find position of first non binary variable.
 	 * This is not part of computeState as this piece of information nevers gets invalidated.
@@ -48,7 +48,7 @@ void LinearPropagator::init(const Domain &domain)
 	firstNonBin.resize(m);
 	for (int i = 0; i < m; i++)
 	{
-		const auto &row = data.mip.rows[i];
+		const auto &row = mip.rows[i];
 		const int *idx = row.idx();
 		int cnt = row.size();
 		int k = 0;
@@ -73,7 +73,7 @@ void LinearPropagator::update(const Domain &domain, Domain::iterator mark)
 		if (bdchg.type != BoundChange::Type::SHIFT)
 			continue;
 
-		for (const auto &[i, coef] : data.mip.cols[bdchg.var])
+		for (const auto &[i, coef] : mip.cols[bdchg.var])
 			states[i].infeas = false;
 	}
 }
@@ -83,7 +83,7 @@ void LinearPropagator::undoBoundChange(const Domain &domain, const BoundChange &
 {
 	int j = bdchg.var;
 
-	for (const auto &[i, coef] : data.mip.cols[j])
+	for (const auto &[i, coef] : mip.cols[j])
 	{
 		State &s = states[i];
 
@@ -93,8 +93,8 @@ void LinearPropagator::undoBoundChange(const Domain &domain, const BoundChange &
 		/* update diameter */
 		if (bdchg.type != BoundChange::Type::SHIFT)
 		{
-			double origLB = data.mip.lb[j];
-			double origUB = data.mip.ub[j];
+			double origLB = mip.lb[j];
+			double origUB = mip.ub[j];
 			FP_ASSERT(origUB >= origLB);
 			double spread = origUB - origLB;
 			if (domain.type(j) == 'C')
@@ -134,7 +134,7 @@ void LinearPropagator::propagateOneRowLessThan(PropagationEngine &engine, int i,
 
 	if (slack < -domain.feasTol)
 	{
-		// consoleLog("Row {} mult={} infeasible", data.mip.rNames[i], mult);
+		// consoleLog("Row {} mult={} infeasible", mip.rNames[i], mult);
 		s.infeas = true;
 		return;
 	}
@@ -145,16 +145,16 @@ void LinearPropagator::propagateOneRowLessThan(PropagationEngine &engine, int i,
 
 	if (lessEqualThan(s.diameter, slack, domain.feasTol))
 	{
-		// consoleLog("Row {} mult={} cannot propagate: {} <= {}", data.mip.rNames[i], mult, s.diameter, slack);
+		// consoleLog("Row {} mult={} cannot propagate: {} <= {}", mip.rNames[i], mult, s.diameter, slack);
 		// consoleLog("minAct={} maxAct={}", s.minAct, s.maxAct);
 		return;
 	}
 
-	// consoleLog("Tighten vars from row {} mult={}", data.mip.rNames[i], mult);
+	// consoleLog("Tighten vars from row {} mult={}", mip.rNames[i], mult);
 
 	/* Loop over the row and tighten variables */
 	bool infeas = false;
-	const auto &row = data.mip.rows[i];
+	const auto &row = mip.rows[i];
 	const int *idx = row.idx();
 	const double *coefs = row.coef();
 	int size = row.size();
@@ -235,8 +235,8 @@ void LinearPropagator::propagateOneRowLessThan(PropagationEngine &engine, int i,
 /* propagate a single linear constraint */
 void LinearPropagator::propagateOneRow(PropagationEngine &engine, int i)
 {
-	char sense = data.mip.sense[i];
-	double rhs = data.mip.rhs[i];
+	char sense = mip.sense[i];
+	double rhs = mip.rhs[i];
 
 	bool rowHasLB = (sense != 'L');
 	bool rowHasUB = (sense != 'G');
@@ -254,12 +254,12 @@ void LinearPropagator::propagateOneRow(PropagationEngine &engine, int i)
 		/* Check if the row became infeasible */
 		if (rowHasLB && lessThan(maxAct, rhs, domain.feasTol))
 		{
-			// consoleLog("Row {} mult={} infeasible", data.mip.rNames[i], 1.0);
+			// consoleLog("Row {} mult={} infeasible", mip.rNames[i], 1.0);
 			states[i].infeas = true;
 		}
 		else if (rowHasUB && greaterThan(minAct, rhs, domain.feasTol))
 		{
-			// consoleLog("Row {} mult={} infeasible", data.mip.rNames[i], -1.0);
+			// consoleLog("Row {} mult={} infeasible", mip.rNames[i], -1.0);
 			states[i].infeas = true;
 		}
 		/* If not, then all variables must be fixed and there is nothing to do anyway */
@@ -282,7 +282,7 @@ void LinearPropagator::propagate(PropagationEngine &engine, Domain::iterator mar
 	if (initialProp)
 	{
 		/* Enqueue all rows */
-		for (int i = 0; i < data.mip.nrows; i++)
+		for (int i = 0; i < mip.nrows; i++)
 			qrows.push(i);
 	}
 	else
@@ -294,7 +294,7 @@ void LinearPropagator::propagate(PropagationEngine &engine, Domain::iterator mar
 		{
 			const auto &bdchg = domain.change(itr++);
 			int j = bdchg.var;
-			for (const auto &[i, coef] : data.mip.cols[j])
+			for (const auto &[i, coef] : mip.cols[j])
 			{
 				const State &s = states[i];
 

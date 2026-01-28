@@ -15,6 +15,7 @@
 #include "linear_propagator.h"
 #include "mip.h"
 #include "MpsParser.hpp"
+#include "queue_threadsafe.h"
 #include "solution.h"
 #include "strategies.h"
 #include "table_propagators.h"
@@ -349,9 +350,7 @@ protected:
 		params.solveLp = true;
 	}
 
-	void exec() override {
-		gStopWatch();
-
+	std::unique_ptr<MIPData> read_config_and_problem() {
 		params.readConfig();
 
 		/* set mip competition default parameters */
@@ -372,28 +371,45 @@ protected:
 		/* Read the problem; create an LP relaxation solver and build MIPData. */
 		MIPInstance origMip = MpsParser::loadProblem(args.input[0]);
 		MIPModelPtr model = make_lp_solver(origMip);
-		MIPData data(std::move(origMip), model, rankerNeedsCliqueCover(params.ranker));
 
 		consoleInfo("Reading time = {}", gStopWatch().lap());
 		consoleLog("");
-		consoleLog("Problem:  #rows={} #cols={} #nnz={}", data.mip.nrows, data.mip.ncols, data.mip.rows.val.size());
+		consoleLog("Problem:  #rows={} #cols={} #nnz={}", origMip.nrows, origMip.ncols, origMip.rows.val.size());
 		consoleLog("");
 
+		return std::make_unique<MIPData>(std::move(origMip), model, rankerNeedsCliqueCover(params.ranker));
+	}
+
+	void exec() override {
+		gStopWatch();
+
+		/* Queue containing all FPR strategies we want to run. TODO: extend this! */
+		// ThreadSafeQueue<std::pair<RankerType, ValueChooserType>> fpr_queue_cpu = {
+		// 	{RankerType::FRAC, ValueChooserType::RANDOM_LP},
+		// 	{RankerType::DUALS, ValueChooserType::RANDOM_LP},
+		// 	{RankerType::RANDOM, ValueChooserType::RANDOM_LP},
+		// 	{RankerType::REDCOSTS, ValueChooserType::RANDOM_LP},
+		// 	{RankerType::TYPE, ValueChooserType::RANDOM_LP}
+		// };
+
+		auto mip_data = read_config_and_problem();
+
 		/* Initialize propagators and do one round of propagation. */
-		const MIPInstance &mip = data.mip;
-		PropagationEngine engine{data};
-		engine.add(PropagatorPtr{new CliquesPropagator{data.cliquetable}});
-		engine.add(PropagatorPtr{new ImplPropagator{data.impltable}});
-		engine.add(PropagatorPtr{new LinearPropagator{data}});
+		const MIPInstance &mip = mip_data->mip;
+
+		PropagationEngine engine{mip};
+		engine.add(PropagatorPtr{new CliquesPropagator{mip_data->cliquetable}});
+		engine.add(PropagatorPtr{new ImplPropagator{mip_data->impltable}});
+		engine.add(PropagatorPtr{new LinearPropagator{mip}});
 		engine.init(mip.lb, mip.ub, mip.xtype);
 		const Domain &domain = engine.getDomain();
 		bool infeas = engine.propagate(true);
 		FP_ASSERT(!infeas);
 
 		gStopWatch().lap();
-		/* Potentially solve the LP relaxation. */
+		/* Potentially solve the LP relaxation using PDLP; submit a thread for this!. In the threads, run LP free FPR variants as long as possible. */
 		if (params.solveLp)
-			solve_initial_lp(data);
+			solve_initial_lp(*mip_data);
 
 		consoleInfo("LP time = {}", gStopWatch().lap());
 
@@ -410,23 +426,23 @@ protected:
 			/* Disable output for the time being to not pollute the command line. */
 			params.enableOutput = false;
 
-			runPortfolio(data, params);
+			runPortfolio(*mip_data, params);
 
 			params.enableOutput = enableOutputOld;
 		}
 		else
 		{
 			consoleInfo("Running single heuristic!");
-			runSingleHeuristic(data, params);
+			runSingleHeuristic(*mip_data, params);
 		}
 
 
 		if (params.writeSol) {
-			if (data.solpool.hasFeas()) {
+			if (mip_data->solpool.hasFeas()) {
 				consoleInfo("Writing best found solution");
-				auto best_sol = data.solpool.getIncumbent();
+				auto best_sol = mip_data->solpool.getIncumbent();
 
-				writeSolToFile(data.mip, best_sol.x, best_sol.objval);
+				writeSolToFile(mip_data->mip, best_sol.x, best_sol.objval);
 			} else {
 				consoleInfo("Did not find feasible solution; cannot write best sol");
 			}
@@ -434,13 +450,13 @@ protected:
 
 		consoleInfo("Printing the solpool");
 		// Print solution pool
-		data.solpool.print();
+		mip_data->solpool.print();
 
 		consoleInfo("[results]");
-		consoleLog("found = {}", static_cast<int>(data.solpool.hasFeas()));
-		consoleLog("primalBound = {}", data.solpool.primalBound());
-		if (data.solpool.hasSols())
-			consoleLog("minAbsViol = {}", data.solpool.minViolation());
+		consoleLog("found = {}", static_cast<int>(mip_data->solpool.hasFeas()));
+		consoleLog("primalBound = {}", mip_data->solpool.primalBound());
+		if (mip_data->solpool.hasSols())
+			consoleLog("minAbsViol = {}", mip_data->solpool.minViolation());
 		else
 			consoleLog("minAbsViol = {}", 1000000.0);
 

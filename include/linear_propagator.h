@@ -13,7 +13,7 @@
 class LinearPropagator : public PropagatorI
 {
 public:
-	LinearPropagator(const MIPData &data);
+	LinearPropagator(const MIPInstance& mip);
 	std::string name() const override { return "LinearPropagator"; }
 	void init(const Domain &domain) override;
 	void update(const Domain &domain, Domain::iterator mark) override;
@@ -23,7 +23,7 @@ public:
 
 private:
 	// Matrix data
-	const MIPData &data;
+	const MIPInstance& mip;
 	// State (note: activities are maintained by the engine itself!)
 	Domain::iterator lastUpdated;
 	struct State
