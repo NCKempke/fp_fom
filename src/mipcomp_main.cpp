@@ -290,9 +290,7 @@ protected:
 		 */
 		// TODO: run GPU FPR on another thread as well (and only 5 CPU fix-and-propagate threads then).
 
-		// TODO: solve PDLP in parallel!
-		/* Potentially solve the LP relaxation using PDLP; submit a thread for this!. In the other threads, run LP free FPR variants as long as possible. */
-
+		/* Solve the LP relaxation using PDLP; we use one separate thread for this. */
 		thread_pool.enqueue([&] () {
 			solve_initial_lp(*mip_data, params);
 		});
@@ -306,7 +304,8 @@ protected:
 		EvolutionSearch evo_search(mip, gpu_data);
 		evo_search.run();
 
-		// TODO: Communicate stop if the threads to not stop themselves!
+		// TODO: now, check the pool for new incumbents and write these out + write the timing file. Also, check for the finished root LP thread. Either start one more FPR or resolve the root LP to higher accuracy? Though this messes with GPU ..
+		// TODO: Communicate stop if the threads do not stop themselves!
 
 		/* For now, run at least 10 seconds. */
 		using namespace std::chrono_literals;
