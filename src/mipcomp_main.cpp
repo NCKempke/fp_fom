@@ -79,6 +79,43 @@ static std::vector<std::unique_ptr<std::atomic<bool>>> submit_fpr_workers(MIPDat
 	return flags;
 }
 
+// construct LP solution if needed by our var/value strategies
+void solve_initial_lp(MIPData &data, const Params& params)
+{
+	int n = data.mip.ncols;
+	const double start_time = gStopWatch().elapsed();
+
+	consoleLog("Solving initial LP relaxation");
+
+	/* Should the objective be zeroed? */
+	if (params.zeroObj)
+	{
+		consoleLog("Zero-ing out LP objective");
+
+		std::vector<double> zeros(n, 0.0);
+		std::vector<int> allIdx(n, 0);
+		std::iota(allIdx.begin(), allIdx.end(), 0);
+
+		data.lp->objcoefs(n, allIdx.data(), zeros.data());
+		data.lp->objOffset(0.0);
+	}
+
+	consoleLog("Using {} {} to solve the LP relaxation.", toString(params.solver), toString(params.lpMethod));
+
+	data.primals = solveLP(data.lp, params, true);
+
+	data.duals.resize(data.lp->nrows());
+	data.reduced_costs.resize(data.lp->ncols());
+
+	data.lp->dual_sol(data.duals.data());
+	data.lp->reduced_costs(data.reduced_costs.data());
+
+	FP_ASSERT(!data.lp_solution_ready.load());
+	data.lp_solution_ready.store(true);
+
+	consoleInfo("LP time = {}", gStopWatch().elapsed() - start_time);
+}
+
 class MyApp : public App
 {
 protected:
@@ -99,41 +136,6 @@ protected:
 		}
 		return true;
 	}
-
-	// construct LP solution if needed by our var/value strategies
-	void solve_initial_lp(MIPData &data)
-	{
-		int n = data.mip.ncols;
-
-		consoleLog("Solving initial LP relaxation");
-
-		/* Should the objective be zeroed? */
-		if (params.zeroObj)
-		{
-			consoleLog("Zero-ing out LP objective");
-
-			std::vector<double> zeros(n, 0.0);
-			std::vector<int> allIdx(n, 0);
-			std::iota(allIdx.begin(), allIdx.end(), 0);
-
-			data.lp->objcoefs(n, allIdx.data(), zeros.data());
-			data.lp->objOffset(0.0);
-		}
-
-		consoleLog("Using {} {} to solve the LP relaxation.", toString(params.solver), toString(params.lpMethod));
-
-		data.primals = solveLP(data.lp, params, true);
-
-		data.duals.resize(data.lp->nrows());
-		data.reduced_costs.resize(data.lp->ncols());
-
-		data.lp->dual_sol(data.duals.data());
-		data.lp->reduced_costs(data.reduced_costs.data());
-
-		FP_ASSERT(!data.lp_solution_ready.load());
-		data.lp_solution_ready.store(true);
-	}
-
 
 	void writeSolToFile(const MIPInstance &mip, const std::vector<double> &sol, double best_obj)
 	{
@@ -278,7 +280,7 @@ protected:
 			{RankerType::TYPE, ValueChooserType::RANDOM_LP}
 		};
 
-		worker_flags = submit_fpr_workers(*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, gStopWatch().elapsed() + 	300, 6, params);
+		worker_flags = submit_fpr_workers(*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, gStopWatch().elapsed() + 300, 5, params);
 
 		/* We run in parallel: The root LP using PDLP, 6 CPU fix-and-propagate threads, 1 thread running the GPU evolution search.
 		 *
@@ -287,11 +289,11 @@ protected:
 		// TODO: run GPU FPR on another thread as well (and only 5 CPU fix-and-propagate threads then).
 
 		// TODO: solve PDLP in parallel!
-		/* Potentially solve the LP relaxation using PDLP; submit a thread for this!. In the threads, run LP free FPR variants as long as possible. */
-		if (params.solveLp)
-			solve_initial_lp(*mip_data);
+		/* Potentially solve the LP relaxation using PDLP; submit a thread for this!. In the other threads, run LP free FPR variants as long as possible. */
 
-		consoleInfo("LP time = {}", gStopWatch().lap());
+		thread_pool.enqueue([&] () {
+			solve_initial_lp(*mip_data, params);
+		});
 
 		// TODO: start evolution search in parallel!
 
@@ -303,6 +305,12 @@ protected:
 		evo_search.run();
 
 		// TODO: Communicate stop if the threads to not stop themselves!
+
+		/* For now, run at least 10 seconds. */
+		using namespace std::chrono_literals;
+		while (gStopWatch().elapsed() < 10) {
+			std::this_thread::sleep_for(1ms);
+		}
 
 		/* Tell everyone to stop. */
 		consoleInfo("Setting stop flags");
