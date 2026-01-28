@@ -53,7 +53,6 @@
 #endif
 
 static const unsigned int MIN_NUMBER_OF_INPUTS = 1;
-std::mutex globalMutex;
 
 /* Submit n fix-and-propagate workers continuously attempting to run some fix and propagate. Return's a vector of n_workers stop flags that can be used to cancel a worker. */
 static std::vector<std::unique_ptr<std::atomic<bool>>> submit_fpr_workers(MIPData& mip_data, ThreadPool& thread_pool, const std::vector<std::pair<RankerType, ValueChooserType>>& strategies, std::atomic<size_t>& global_counter, const double deadline, int n_workers, const Params& params)
@@ -219,6 +218,7 @@ protected:
 	}
 
 	std::unique_ptr<MIPData> read_config_and_problem() {
+		consoleLog("Reading the configuration.");
 		params.readConfig();
 
 		/* set mip competition default parameters */
@@ -240,23 +240,32 @@ protected:
 		MIPInstance origMip = MpsParser::loadProblem(args.input[0]);
 		MIPModelPtr model = make_lp_solver(origMip);
 
-		consoleInfo("Reading time = {}", gStopWatch().lap());
-		consoleLog("");
-		consoleLog("Problem:  #rows={} #cols={} #nnz={}", origMip.nrows, origMip.ncols, origMip.rows.val.size());
-		consoleLog("");
-
 		return std::make_unique<MIPData>(std::move(origMip), model, rankerNeedsCliqueCover(params.ranker));
 	}
 
 	void exec() override {
 		gStopWatch();
 
-		ThreadPool thread_pool(params.threads);
+		/* First, read the parameters and setup the MIP competition settings. */
+		// TODO: also initialize the GPU here; check the number of SMs etc.
+		auto mip_data = read_config_and_problem();
+		const MIPInstance &mip = mip_data->mip;
+
+		// TODO: write input to timing file here.
+		consoleInfo("Reading time = {}", gStopWatch().lap());
+		consoleLog("");
+		consoleLog("Problem:  #rows={} #cols={} #nnz={}", mip.nrows, mip.ncols, mip.rows.val.size());
+		consoleLog("");
+
+		FP_ASSERT(params.threads >= 1);
+
+		/* We run this thread + params.threads - 1 threads. */
+		ThreadPool thread_pool(params.threads - 1);
 		std::atomic<size_t> fpr_counter(0);
 		std::vector<std::unique_ptr<std::atomic<bool>>> worker_flags;
 
 		/* Vector containing all FPR strategies we want to run repeatedly. The worker threads iterate this queue and, until timeout, try each strategy (changing the random seed each time/the lp solution can get updated). TODO: extend this! */
-		std::vector<std::pair<RankerType, ValueChooserType>> fpr_queue_cpu = {
+		const static std::vector<std::pair<RankerType, ValueChooserType>> fpr_queue_cpu = {
 			{RankerType::FRAC, ValueChooserType::RANDOM_LP},
 			{RankerType::DUALS, ValueChooserType::RANDOM_LP},
 			{RankerType::RANDOM, ValueChooserType::RANDOM_LP},
@@ -264,12 +273,13 @@ protected:
 			{RankerType::TYPE, ValueChooserType::RANDOM_LP}
 		};
 
-		auto mip_data = read_config_and_problem();
+		/* We run in parallel: The root LP using PDLP, 6 CPU fix-and-propagate threads, 1 thread running the GPU evolution search.
+		 *
+		 * We do not start a separate thread for the root LP runs. Rather, this is done on this thread. After the thread finished, the current thread starts checking + writing solutions and maybe adjusts the amount of workers.
+		 */
+		// TODO: run GPU FPR on another thread as well (and only 5 CPU fix-and-propagate threads then).
 
-		/* Initialize propagators and do one round of propagation. */
-		const MIPInstance &mip = mip_data->mip;
-
-		gStopWatch().lap();
+		// TODO: solve PDLP in parallel!
 		/* Potentially solve the LP relaxation using PDLP; submit a thread for this!. In the threads, run LP free FPR variants as long as possible. */
 		if (params.solveLp)
 			solve_initial_lp(*mip_data);
@@ -278,12 +288,16 @@ protected:
 
 		worker_flags = submit_fpr_workers(*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, gStopWatch().elapsed() + 	300, 6, params);
 
+		// TODO: start evolution search in parallel!
+
 		/* Dedicate one process to running the GPU loop. The other processes run FPR-CPU for now. */
 		GpuModel gpu_data(mip);
 
 		consoleInfo("Running evo search");
 		EvolutionSearch evo_search(mip, gpu_data);
 		evo_search.run();
+
+		// TODO: Communicate stop if the threads to not stop themselves!
 
 		/* Tell everyone to stop. */
 		consoleInfo("Setting stop flags");
@@ -293,6 +307,7 @@ protected:
 
 		thread_pool.wait();
 
+		// TODO: make this thread write solutions to file in parallel.
 		if (params.writeSol) {
 			if (mip_data->solpool.hasFeas()) {
 				consoleInfo("Writing best found solution");
@@ -304,8 +319,7 @@ protected:
 			}
 		}
 
-		consoleInfo("Printing the solpool");
-		// Print solution pool
+		/* Final information displayed on command line. */
 		mip_data->solpool.print();
 
 		consoleInfo("[results]");
