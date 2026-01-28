@@ -132,6 +132,10 @@ __device__ void compute_random_move(const GpuModelPtrs &model, curandState &stat
     /* Make sure shared memory is visible to all threads in the block. */
     __syncthreads();
 
+    /* Don't run if these are too close. */
+    if (ub - lb < 0.001)
+        return;
+
     // TODO: fixval != col_val
     const double fixval = static_cast<int>((lb + (ub - lb) * random_val) + 0.5);
 
@@ -650,6 +654,8 @@ void EvolutionSearch::run()
      *
      *
      */
+
+    // TODO: sort ints and bins/extract them. Many moves only make sense for ints and bins!
 
     consoleLog("Initial slack     {}", sum_slack);
     consoleLog("Initial objective {}", objective);
