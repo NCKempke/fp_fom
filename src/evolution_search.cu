@@ -298,7 +298,7 @@ __device__ void compute_mtm_unsat_move(const GpuModelPtrs &model, const double *
     const double ub = model.ub[col];
     const double old_val = sol[col];
 
-    // If a >= 0, decreasing x increases slack in a·x <= b; skip if x is already at its lower bound. (analogous for a <= 0)
+    // If a >= 0, decreasing x increases slack in a x <= b; skip if x is already at its lower bound. (analogous for a <= 0)
     if ((coeff <= 0 and old_val == ub) or (coeff >= 0 and lb == old_val))
         return;
 
@@ -324,26 +324,6 @@ __device__ void compute_mtm_unsat_move(const GpuModelPtrs &model, const double *
         /* best_score and best_move live in smem; however, only thread_idx == 0 touches them (for now) so we don't __syncthreads here. */
     }
 }
-
-__global__ void compute_violated_constraints(const GpuModelPtrs model, const double *slack, int* violated_constraints,  int n_rows, int n_moves)
-{
-    // const int block_idx = blockIdx.x;
-    // const int grid_dim = gridDim.x;
-    // const int thread_idx = threadIdx.x;
-    const int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-    __syncthreads();
-    /* Initialize shared memory on thread 0. */
-    if (i < n_rows)
-    {
-        violated_constraints[i] =
-            (slack[i] != 0.0 && model.row_sense[i] == 'E') ||
-            slack[i] <= 0.0;
-    }
-    __syncthreads();
-
-}
-
 
 /* On exit, best_scores and best_random_moves contain for each block the best move and score found by the block. Consequently, best_scores and best_random_moves need to be larger than the grid dimension. */
 __global__ void compute_random_moves_kernel(const GpuModelPtrs model, const double *slack, const double *sol, double objective, double sum_slack, solution_score *best_scores, single_col_move *best_random_moves, int n_cols, int n_moves)
@@ -587,11 +567,17 @@ double thrust_dot_product(const thrust::device_vector<double> &a,
     );
 }
 
-struct is_even_t
-{
-    __host__ __device__ bool operator()(int flag) const
-    {
-        return flag;
+/* Use cub to reduce violated constraints. We only check cub's buffersize once here. */
+struct IsViolated {
+    const double* slack;
+    const char* row_sense;
+
+    __device__ bool operator()(int idx) const {
+        const int is_eq = row_sense[idx] == 'E';
+        const double slack_row = slack[idx];
+
+        /* If we have an equality, any slack counts. If we have an inequality, we only count negative slack rhs - Ax >= 0. Branching does not really matter here. */
+        return (is_eq ? fabs(slack_row) : -slack_row) > 1e-6;  // TODO: use tolerances.h when merged from other branch.
     }
 };
 
@@ -600,23 +586,26 @@ void EvolutionSearch::run()
     std::vector<double> sol_host(model_host.ncols, 0.0);
     std::vector<double> slacks_host = model_host.rhs;
     double sum_slack = 0.0;
+    thrust::device_vector<int64_t> cub_n_selected(1);
+    size_t cub_reduce_buffer_bytes = 0;
 
     /* Compute slacks_host = slacks_host - Ax = rhs - Ax */
     model_host.rows.SpMV(-1.0, sol_host.data(), slacks_host.data());
 
-    int n_violated_constraints = 0;
+    int64_t n_violated_constraints = 0;
     for (int irow = 0; irow < model_host.nrows; ++irow)
     {
         const double slack_row = slacks_host[irow];
         FP_ASSERT(model_host.sense[irow] == 'L' || model_host.sense[irow] == 'E');
 
-        if (model_host.sense[irow] == 'I' || slack_row < 0.0)
-            n_violated_constraints++;
-        if (model_host.sense[irow] == 'E' || slack_row < 0.0) {
+        if (model_host.sense[irow] == 'L' && -slack_row > 1e-6) {
             sum_slack += fabs(slack_row);
             n_violated_constraints++;
         }
-
+        if (model_host.sense[irow] == 'E' && fabs(slack_row) > 1e-6) {
+            sum_slack += fabs(slack_row);
+            n_violated_constraints++;
+        }
     }
 
     consoleLog("Violated constraints: {}", n_violated_constraints);
@@ -633,6 +622,10 @@ void EvolutionSearch::run()
     thrust::device_vector<solution_score> best_scores_single_col(N_BLOCKS_SINGLE_COL_MOVE * AVAILABLE_MOVED, {DBL_MAX, DBL_MAX});
     thrust::device_vector<single_col_move> best_single_col_moves(N_BLOCKS_SINGLE_COL_MOVE * AVAILABLE_MOVED);
     thrust::device_vector<int> violated_constraints(model_device.nrows);
+
+    cub::DeviceSelect::If(nullptr, cub_reduce_buffer_bytes, thrust::make_counting_iterator(0), thrust::raw_pointer_cast(violated_constraints.data()), thrust::raw_pointer_cast(cub_n_selected.data()), model_host.nrows, IsViolated{thrust::raw_pointer_cast(slacks_device.data()), thrust::raw_pointer_cast(gpu_model_ptrs.row_sense)});
+
+    thrust::device_vector<std::uint8_t> cub_reduce_buffer(cub_reduce_buffer_bytes);
 
     /* Do some rounds:
      * get starting solutions (somehow zeros; lbs; ubs; lp_sol rounded; fpr solutions ...)
@@ -655,12 +648,12 @@ void EvolutionSearch::run()
     for (int round = 0; round < n_rounds; ++round) {
         int nmoves = 1e3;
 
-        compute_violated_constraints<<<N_BLOCKS_SINGLE_COL_MOVE, BLOCKSIZE_SINGLE_COL_MOVE>>>(
-            gpu_model_ptrs, thrust::raw_pointer_cast(slacks_device.data()),
-            thrust::raw_pointer_cast(violated_constraints.data()), model_host.nrows, nmoves);
+        /* Gather violated rows. */
+        cub::DeviceSelect::If(
+            thrust::raw_pointer_cast(cub_reduce_buffer.data()), cub_reduce_buffer_bytes, thrust::make_counting_iterator(0), thrust::raw_pointer_cast(violated_constraints.data()), thrust::raw_pointer_cast(cub_n_selected.data()), model_host.nrows, IsViolated{thrust::raw_pointer_cast(slacks_device.data()), thrust::raw_pointer_cast(gpu_model_ptrs.row_sense)});
 
-        //TODO: it seems that DeviceSelect::Flagged should be able to shrink the vector but
-
+        /* This is a hidden copy ! */
+        consoleLog("Found {} violated constraints", cub_n_selected[0]);
 
         /* Compute best move for each block. */
         compute_random_moves_kernel<<<N_BLOCKS_SINGLE_COL_MOVE, BLOCKSIZE_SINGLE_COL_MOVE>>>(
