@@ -129,7 +129,7 @@ __device__ solution_score compute_score_single_col_move(const GpuModelPtrs &mode
 
     //TODO: is this correct to skip here?
     if (isEq(delta, 0))
-        return{objective, slack_change_thread};
+        return{objective, sum_slack};
     /* Iterate column and compute changes in violation. */
     const int col_beg = model.row_ptr_trans[col];
     const int col_end = model.row_ptr_trans[col + 1];
