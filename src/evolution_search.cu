@@ -43,6 +43,9 @@ constexpr int AVAILABLE_MOVED = 4;
  * - Scoring function;
  */
 
+constexpr double FEASTOL = 1e-6;
+constexpr double EPSILON = 1e-9;
+
 struct single_col_move
 {
     double val;
@@ -62,6 +65,48 @@ struct solution_score
     }
 };
 
+
+// Device functions for comparisons with absolute tolerance only
+__device__ bool isEq(double a, double b) {
+    return fabsf(a - b) <= EPSILON;
+}
+
+__device__ bool isGE(double a, double b) {
+    // a >= b considering tolerance
+    return a-b >= -EPSILON;
+}
+
+__device__ bool isGT(double a, double b) {
+    // a >= b considering tolerance
+    return a-b > -EPSILON;
+}
+
+__device__ bool isLE(double a, double b) {
+    // a <= b considering tolerance
+    return a-b <= EPSILON;
+}
+
+__device__ bool isLT(double a, double b) {
+    // a <= b considering tolerance
+    return a-b < EPSILON;
+}
+// Device functions for comparisons with absolute tolerance only
+__device__ bool isFeasEq(double a, double b) {
+    return fabsf(a - b) <= FEASTOL;
+}
+
+__device__ bool isFeasGE(double a, double b) {
+    // a >= b considering tolerance
+    return a-b >= -FEASTOL;
+}
+
+__device__ bool isFeasLE(double a, double b) {
+    // a <= b considering tolerance
+    return a-b <= FEASTOL;
+}
+
+
+
 /* Returns for threadIdx.x == 0 the score after virtually applying give move. */
 __device__ solution_score compute_score_single_col_move(const GpuModelPtrs &model, const double *slack, const double *sol, single_col_move move, double objective, double sum_slack)
 {
@@ -79,6 +124,9 @@ __device__ solution_score compute_score_single_col_move(const GpuModelPtrs &mode
     //     printf("fixval: %g; colval: %g\n", move.val, col_val);
     // }
 
+    //TODO: is this correct to skip here?
+    if (isEq(delta, 0))
+        return{objective, slack_change_thread};
     /* Iterate column and compute changes in violation. */
     const int col_beg = model.row_ptr_trans[col];
     const int col_end = model.row_ptr_trans[col + 1];
@@ -166,7 +214,7 @@ __device__ void compute_oneopt_move(const GpuModelPtrs &model, curandState &stat
     double obj = model.objective[col];
 
     /* Only do this for variables with non-zero objective. */
-    if ((obj > 0.0 && col_val == lb) || (obj < 0.0 && col_val == ub) || obj == 0.0)
+    if ((isGT(obj, 0.0) && isEq(col_val, lb)) || (isLT(obj, 0.0) && isEq(col_val, ub)) || isEq(obj, 0.0))
         return;
 
     /* Positive stepsize in objective direction. */
@@ -299,7 +347,7 @@ __device__ void compute_mtm_unsat_move(const GpuModelPtrs &model, const double *
     const double old_val = sol[col];
 
     // If a >= 0, decreasing x increases slack in a x <= b; skip if x is already at its lower bound. (analogous for a <= 0)
-    if ((coeff <= 0 and old_val == ub) or (coeff >= 0 and lb == old_val))
+    if ((isLE(coeff, 0) and isEq(old_val, ub)) or (isGE(coeff , 0) and isEq(lb, old_val)))
         return;
 
     // Exact value that makes slack zero
