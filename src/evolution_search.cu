@@ -304,6 +304,7 @@ __device__ void compute_flip_move(const GpuModelPtrs &model, const double *slack
     double lb = model.lb[col];
     double ub = model.ub[col];
 
+    // is binary variable?
     if (model.var_type[col] == 'I' && lb == 0 && ub == 1)
         return;
     const double fixval = 1 - sol[col];
@@ -334,8 +335,8 @@ __device__ void compute_mtm_unsat_move(const GpuModelPtrs &model, const double *
         return;
 
     const double slack_for_row = slack[row];
-    // row must be inequality and violated
-    if (model.row_sense[row] == 'E' or slack_for_row >= 0 )
+    // skip satisfied constraints -> either equation with slack == 0 or inequalities with positive slack
+    if ((model.row_sense[row] == 'E' &&isFeasEq(slack_for_row, 0))  || isGT(slack_for_row, 0) )
         return;
 
     // get variable
@@ -346,16 +347,30 @@ __device__ void compute_mtm_unsat_move(const GpuModelPtrs &model, const double *
     const double ub = model.ub[col];
     const double old_val = sol[col];
 
+    bool round_up = false;
     // If a >= 0, decreasing x increases slack in a x <= b; skip if x is already at its lower bound. (analogous for a <= 0)
-    if ((isLE(coeff, 0) and isEq(old_val, ub)) or (isGE(coeff , 0) and isEq(lb, old_val)))
-        return;
+    // if (model.row_sense[row] != 'E' or (model.row_sense[row] != 'E' &&isGT(slack_for_row, 0))) {
+    if (!(model.row_sense[row] == 'E' &&isGE(slack_for_row, 0))) {
+        if ((isLE(coeff, 0) &&isEq(old_val, ub)) || (isGE(coeff , 0) &&isEq(lb, old_val)))
+            return;
+        round_up = isLE(coeff, 0.0);
+    }
+    else {
+        assert(slack_for_row > 0.0);
+            if ( (isGE(coeff, 0) &&isEq(old_val, ub)) || (isLE(coeff , 0) &&isEq(lb, old_val)) )
+                return;
+        round_up = isGE(coeff, 0.0);
+    }
 
     // Exact value that makes slack zero
     double fixval = old_val - slack_for_row / coeff;
 
+    if (model.var_type[col] == 'I')
+        fixval = static_cast<int>(fixval + (round_up ? 1 : 0));
+
     // printf("col %d in row  %d fixed to  %f", row, col, fixval);
     // Project to bounds
-    fixval = min(ub, max(lb, fixval));
+    fixval = fmin(ub, fmax(lb, fixval));
 
     /* score is valid only for threadIdx.x == 0 */
     const auto score = compute_score_single_col_move(model, slack, sol, {fixval, col}, objective, sum_slack);
