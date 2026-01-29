@@ -21,19 +21,21 @@
 
 constexpr int N_BLOCKS_SINGLE_COL_MOVE = 512;
 constexpr int BLOCKSIZE_SINGLE_COL_MOVE = 32;
-constexpr int AVAILABLE_MOVED = 4;
+constexpr int AVAILABLE_MOVED = 5;
 
 /* Moves:
  * - one_opt (feas)   : implemented not applied
  * - one_opt (greedy) : push variable in direction of its objective
  * - flip             : flips a binary randomly selected variable
  * - random           : selects a random variable and assigns it a random value
+ * TODO:
+ * - mtm_satisfied    : select a random satisfied constraint and set slack to zero
  * - mtm_unsatisfied  : selects a random violated constraint, then selects a variable within its range
- *                      and adjusts it to make the constraint as feasible as possible TODO: testing it since prob of hitting
+ *                      and adjusts it to make the constraint as feasible as possible
  *
  * TODO:
- * - mtm_satisfied    :
  * - swap             : select two (binary) variables with different values and swap them
+ * - Lagrange         : from Feaspump
  *
  * - TSP swap?
  * - Avoid duplicate moves.
@@ -41,6 +43,7 @@ constexpr int AVAILABLE_MOVED = 4;
  * - Solution pool;
  * - Sync solutions from FPR;
  * - Scoring function;
+ * - Apply "all" for "small" problems instead of random
  */
 
 constexpr double FEASTOL = 1e-6;
@@ -180,8 +183,10 @@ __device__ void compute_random_move(const GpuModelPtrs &model, curandState &stat
     __syncthreads();
 
     // TODO: fixval != col_val
-    const double fixval = static_cast<int>((lb + (ub - lb) * random_val) + 0.5);
+    double fixval = static_cast<int>((lb + (ub - lb) * random_val) + 0.5);
 
+    if (model.var_type[col] == 'I')
+        fixval = static_cast<int>(fixval + 0.5);
     /* score is valid only for threadIdx.x == 0 */
     const auto score = compute_score_single_col_move(model, slack, sol, {fixval, col}, objective, sum_slack);
 
@@ -243,6 +248,7 @@ __device__ void compute_oneopt_move(const GpuModelPtrs &model, curandState &stat
             const double scaled_slack = fabs(coef) * row_slack;
 
             // TODO : maybe allow infeasible solutions here and allow becoming infeasible
+            //TODO: rounding is not considered yet
             stepsize = min(stepsize, (1 - is_eq) * (is_objcoef_pos * stepsize + (1 - is_objcoef_pos) * scaled_slack));
             // if ((sense == 'L' && obj * coef < 0.0)) {
             //     if (coef > 0.0) {
@@ -300,14 +306,13 @@ __device__ void compute_flip_move(const GpuModelPtrs &model, const double *slack
     if (col >= ncols)
         return;
 
-    // TODO column must be integer
     double lb = model.lb[col];
     double ub = model.ub[col];
 
     // is binary variable?
     if (model.var_type[col] == 'I' && lb == 0 && ub == 1)
         return;
-    const double fixval = 1 - sol[col];
+    const double fixval = sol[col] > 0.5 ? 0 : 1;
 
     /* score is valid only for threadIdx.x == 0 */
     const auto score = compute_score_single_col_move(model, slack, sol, {fixval, col}, objective, sum_slack);
@@ -350,7 +355,7 @@ __device__ void compute_mtm_unsat_move(const GpuModelPtrs &model, const double *
     bool round_up = false;
     // If a >= 0, decreasing x increases slack in a x <= b; skip if x is already at its lower bound. (analogous for a <= 0)
     // if (model.row_sense[row] != 'E' or (model.row_sense[row] != 'E' &&isGT(slack_for_row, 0))) {
-    if (!(model.row_sense[row] == 'E' &&isGE(slack_for_row, 0))) {
+    if (!(model.row_sense[row] == 'E' && isGE(slack_for_row, 0))) {
         if ((isLE(coeff, 0) &&isEq(old_val, ub)) || (isGE(coeff , 0) &&isEq(lb, old_val)))
             return;
         round_up = isLE(coeff, 0.0);
@@ -364,6 +369,60 @@ __device__ void compute_mtm_unsat_move(const GpuModelPtrs &model, const double *
 
     // Exact value that makes slack zero
     double fixval = old_val - slack_for_row / coeff;
+
+    if (model.var_type[col] == 'I')
+        fixval = static_cast<int>(fixval + (round_up ? 1 : 0));
+
+    // printf("col %d in row  %d fixed to  %f", row, col, fixval);
+    // Project to bounds
+    fixval = fmin(ub, fmax(lb, fixval));
+
+    /* score is valid only for threadIdx.x == 0 */
+    const auto score = compute_score_single_col_move(model, slack, sol, {fixval, col}, objective, sum_slack);
+
+    /* Write violation to global memory. */
+    if (thread_idx == 0)
+    {
+        if (score.feas_score() < best_score.feas_score())
+        {
+            best_score = score;
+            best_move = {fixval, col};
+        }
+
+        /* best_score and best_move live in smem; however, only thread_idx == 0 touches them (for now) so we don't __syncthreads here. */
+    }
+}
+
+
+__device__ void compute_mtm_sat_move(const GpuModelPtrs &model, const double *slack, const double *sol, const double objective, const double sum_slack, const int row, const int col_index, solution_score
+                                  &best_score, single_col_move &best_move, const int nrows)
+{
+    const int thread_idx = threadIdx.x;
+
+    if (row >= nrows)
+        return;
+
+    const double slack_for_row = slack[row];
+    // skip satisfied constraints -> either equation with slack == 0 or inequalities with positive slack
+    if ( model.row_sense[row] != 'E' && isLE(slack_for_row, 0))
+        return;
+
+    // get variable
+    const int col = model.col_idx[model.row_ptr[row] + col_index];
+    double coeff = model.row_val[model.row_ptr[row] + col_index];
+
+    const double lb = model.lb[col];
+    const double ub = model.ub[col];
+    const double old_val = sol[col];
+
+    bool round_up = false;
+
+    if ((isGE(coeff, 0) && isEq(old_val, ub)) || (isLE(coeff, 0) && isEq(lb, old_val)))
+        return;
+    round_up = isLE(coeff, 0.0);
+
+    // Exact value that makes slack zero
+    double fixval = old_val + slack_for_row / coeff;
 
     if (model.var_type[col] == 'I')
         fixval = static_cast<int>(fixval + (round_up ? 1 : 0));
@@ -535,6 +594,56 @@ __global__ void compute_flip_moves_kernel(const GpuModelPtrs model, const double
         best_scores[block_idx] = best_score;
     }
 }
+
+__global__ void compute_mtm_sat_moves_kernel(const GpuModelPtrs model, const double *slack, const double *sol,
+                                                double objective, double sum_slack, solution_score *best_scores,
+                                                single_col_move *best_mtm_moves, int n_cols, int n_rows, int n_moves)
+{
+    const int block_idx = blockIdx.x;
+    const int grid_dim = gridDim.x;
+    const int thread_idx = threadIdx.x;
+    __shared__ curandState state;
+    __shared__ single_col_move best_move;
+    __shared__ solution_score best_score;
+
+    /* Initialize shared memory on thread 0. */
+    if (thread_idx == 0)
+    {
+        best_move = {0.0, -1};
+        best_score = {DBL_MAX, DBL_MAX};
+    }
+    __syncthreads();
+
+    // int violated_count = end - valid_idx.begin();
+
+    int n_rows_per_block = (n_rows + grid_dim - 1) / grid_dim;
+    // TODO: this is not quite exact
+    int n_moves_per_block = (n_moves + grid_dim - 1) / grid_dim;
+
+    int my_rows_start = min(n_cols, block_idx * n_rows_per_block);
+    int my_rows_end = min(n_cols, (block_idx + 1) * n_rows_per_block);
+    const int row_range = my_rows_end - my_rows_start;
+
+    if (my_rows_start >= my_rows_end)
+        return;
+
+    for (int move = 0; move < n_moves_per_block; ++move) {
+        //TODO: make sure to pick a satisfied constraint
+        /* Pick a row in our interval. This is uniformly distributed over [my_rows_start,...,my_rows_end). */
+        const int row = my_rows_start + static_cast<int>(row_range * curand_uniform(&state));
+        const int col_index = static_cast<int>(curand_uniform(&state) * (model.row_ptr[row + 1] - model.row_ptr[row]));
+        /* Compute a move for the picked column. */
+        compute_mtm_sat_move(model, slack, sol, objective, sum_slack, row, col_index, best_score, best_move, n_rows);
+    }
+
+    /* offload the best move and its score the main memory */
+    if (thread_idx == 0)
+    {
+        best_mtm_moves[block_idx] = best_move;
+        best_scores[block_idx] = best_score;
+    }
+}
+
 
 __global__ void compute_mtm_unsat_moves_kernel(const GpuModelPtrs model, const double *slack, const double *sol,
                                                 double objective, double sum_slack, solution_score *best_scores,
@@ -741,6 +850,13 @@ void EvolutionSearch::run()
             objective, sum_slack,
             thrust::raw_pointer_cast(best_scores_single_col.data()) + N_BLOCKS_SINGLE_COL_MOVE * 3,
             thrust::raw_pointer_cast(best_single_col_moves.data()) + N_BLOCKS_SINGLE_COL_MOVE * 3, model_host.ncols,
+            model_host.nrows,
+            nmoves);
+        compute_mtm_unsat_moves_kernel<<<N_BLOCKS_SINGLE_COL_MOVE, BLOCKSIZE_SINGLE_COL_MOVE>>>(
+            gpu_model_ptrs, thrust::raw_pointer_cast(slacks_device.data()), thrust::raw_pointer_cast(sol_device.data()),
+            objective, sum_slack,
+            thrust::raw_pointer_cast(best_scores_single_col.data()) + N_BLOCKS_SINGLE_COL_MOVE * 4,
+            thrust::raw_pointer_cast(best_single_col_moves.data()) + N_BLOCKS_SINGLE_COL_MOVE * 4, model_host.ncols,
             model_host.nrows,
             nmoves);
 
