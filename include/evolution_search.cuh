@@ -8,7 +8,7 @@ public:
     const MIPInstance& model_host;
     const GpuModel& model_device;
     int n_random_moves = 100000;
-    int n_rounds = 5;
+    int n_rounds = 1000;
 
     /* TODO: GPU solution pool. */
 
