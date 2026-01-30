@@ -191,7 +191,7 @@ __device__ int get_random_int_block(curandState &state, int n)
 }
 
 /* Return whether a column was marked tabu. */
-__device__ inline bool is_tabu(const int *tabu_col, int col, int iter, int tabu_tenure)
+__device__ inline bool is_tabu(const int *tabu_col, int col, int iter, int tabu_tenure = 30)
 {
     return tabu_col[col] > iter - tabu_tenure;
 }
@@ -725,6 +725,9 @@ __global__ void compute_random_moves_kernel(const GpuModelPtrs model, TabuSearch
             /* Pick a column in our interval. This is uniformly distributed over [my_cols_start,..,my_cols_end). */
             const int col = my_cols_start + get_random_int_block(random_state, cols_range);
 
+            if (is_tabu(args.tabu, col, args.iter))
+                continue;
+
             /* Compute a move for the picked column. */
             compute_random_move(model, random_state, args, col, best_score, best_move, n_cols);
         }
@@ -777,6 +780,9 @@ __global__ void compute_oneopt_moves_kernel(const GpuModelPtrs model, TabuSearch
             /* Pick a column in our interval. This is uniformly distributed over [my_cols_start,..,my_cols_end). */
             const int col = my_cols_start + get_random_int_block(random_state, cols_range);
 
+            if (is_tabu(args.tabu, col, args.iter))
+                continue;
+
             /* Compute a move for the picked column. */
             compute_oneopt_move<GREEDY>(model, args, col, best_score, best_move);
         }
@@ -827,6 +833,9 @@ __global__ void compute_flip_moves_kernel(const GpuModelPtrs model, TabuSearchKe
         {
             /* Pick a column in our interval. TODO: This is not uniformly distributed over [my_cols_start,..,my_cols_end). */
             const int col = my_cols_start + get_random_int_block(random_state, cols_range);
+
+            if (is_tabu(args.tabu, col, args.iter))
+                continue;
 
             /* Compute a move for the picked column. */
             compute_flip_move(model, args, col, best_score, best_move);
@@ -881,6 +890,10 @@ __global__ void compute_mtm_sat_moves_kernel(const GpuModelPtrs model, TabuSearc
             /* Pick a row in our interval. TODO: This is not uniformly distributed over [my_rows_start,...,my_rows_end). */
             const int row = my_rows_start + get_random_int_block(random_state, row_range);
             const int col_index = get_random_int_block(random_state, model.row_ptr[row + 1] - model.row_ptr[row]);
+
+            if (is_tabu(args.tabu, model.col_idx[col_index], args.iter))
+                continue;
+
             /* Compute a move for the picked column. */
             compute_mtm_sat_move(model, args, row, col_index, best_score, best_move);
         }
@@ -933,6 +946,9 @@ __global__ void compute_mtm_unsat_moves_kernel(const GpuModelPtrs model, TabuSea
             /* Pick a row in our interval. This is uniformly distributed over [my_rows_start,...,my_rows_end). */
             const int row = args.violated_constraints[get_random_int_block(random_state, row_range)];
             const int col_index = get_random_int_block(random_state, model.row_ptr[row + 1] - model.row_ptr[row]);
+
+            if (is_tabu(args.tabu, model.col_idx[col_index], args.iter))
+                continue;
 
             /* Compute a move for the picked column. */
             compute_mtm_unsat_move(model, args, row, col_index, best_score, best_move);
