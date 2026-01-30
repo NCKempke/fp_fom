@@ -616,16 +616,16 @@ __global__ void compute_random_moves_kernel(const GpuModelPtrs model, const doub
     int my_cols_end = min(n_cols, (block_idx + 1) * n_cols_per_block);
     const int cols_range = my_cols_end - my_cols_start;
 
-    if (my_cols_start >= my_cols_end)
-        return;
+    /* Need at least one column! */
+    if (cols_range > 0) {
+        for (int move = 0; move < n_moves_per_block; ++move)
+        {
+            /* Pick a column in our interval. This is uniformly distributed over [my_cols_start,..,my_cols_end). */
+            const int col = my_cols_start + static_cast<int>((cols_range * curand_uniform(&state)));
 
-    for (int move = 0; move < n_moves_per_block; ++move)
-    {
-        /* Pick a column in our interval. This is uniformly distributed over [my_cols_start,..,my_cols_end). */
-        const int col = my_cols_start + static_cast<int>((cols_range * curand_uniform(&state)));
-
-        /* Compute a move for the picked column. */
-        compute_random_move(model, state, slack, sol, objective, sum_slack, col, best_score, best_move, n_cols);
+            /* Compute a move for the picked column. */
+            compute_random_move(model, state, slack, sol, objective, sum_slack, col, best_score, best_move, n_cols);
+        }
     }
 
     /* offload the best move and its score the main memory */
@@ -666,16 +666,16 @@ __global__ void compute_oneopt_moves_kernel(const GpuModelPtrs model, const doub
     int my_cols_end = min(n_cols, (block_idx + 1) * n_cols_per_block);
     const int cols_range = my_cols_end - my_cols_start;
 
-    if (my_cols_start >= my_cols_end)
-        return;
+    /* Need at least one column! */
+    if (cols_range > 0) {
+        for (int move = 0; move < n_moves_per_block; ++move)
+        {
+            /* Pick a column in our interval. This is uniformly distributed over [my_cols_start,..,my_cols_end). */
+            const int col = my_cols_start + static_cast<int>((cols_range * curand_uniform(&state)));
 
-    for (int move = 0; move < n_moves_per_block; ++move)
-    {
-        /* Pick a column in our interval. This is uniformly distributed over [my_cols_start,..,my_cols_end). */
-        const int col = my_cols_start + static_cast<int>((cols_range * curand_uniform(&state)));
-
-        /* Compute a move for the picked column. */
-        compute_oneopt_move<GREEDY>(model, state, slack, sol, objective, sum_slack, col, best_score, best_move, n_cols);
+            /* Compute a move for the picked column. */
+            compute_oneopt_move<GREEDY>(model, state, slack, sol, objective, sum_slack, col, best_score, best_move, n_cols);
+        }
     }
 
     /* offload the best move and its score the main memory */
@@ -716,16 +716,16 @@ __global__ void compute_flip_moves_kernel(const GpuModelPtrs model, const double
     int my_cols_end = min(n_cols, (block_idx + 1) * n_cols_per_block);
     const int cols_range = my_cols_end - my_cols_start;
 
-    if (my_cols_start >= my_cols_end)
-        return;
+    /* Need at least one column! */
+    if (cols_range > 0) {
+        for (int move = 0; move < n_moves_per_block; ++move)
+        {
+            /* Pick a column in our interval. This is uniformly distributed over [my_cols_start,..,my_cols_end). */
+            const int col = my_cols_start + static_cast<int>((cols_range * curand_uniform(&state)));
 
-    for (int move = 0; move < n_moves_per_block; ++move)
-    {
-        /* Pick a column in our interval. This is uniformly distributed over [my_cols_start,..,my_cols_end). */
-        const int col = my_cols_start + static_cast<int>((cols_range * curand_uniform(&state)));
-
-        /* Compute a move for the picked column. */
-        compute_flip_move(model, slack, sol, objective, sum_slack, col, best_score, best_move, n_cols);
+            /* Compute a move for the picked column. */
+            compute_flip_move(model, slack, sol, objective, sum_slack, col, best_score, best_move, n_cols);
+        }
     }
 
     /* offload the best move and its score the main memory */
@@ -766,16 +766,16 @@ __global__ void compute_mtm_sat_moves_kernel(const GpuModelPtrs model, const dou
     int my_rows_end = min(n_cols, (block_idx + 1) * n_rows_per_block);
     const int row_range = my_rows_end - my_rows_start;
 
-    if (my_rows_start >= my_rows_end)
-        return;
-
-    for (int move = 0; move < n_moves_per_block; ++move) {
-        //TODO: make sure to pick a satisfied constraint
-        /* Pick a row in our interval. This is uniformly distributed over [my_rows_start,...,my_rows_end). */
-        const int row = my_rows_start + static_cast<int>(row_range * curand_uniform(&state));
-        const int col_index = static_cast<int>(curand_uniform(&state) * (model.row_ptr[row + 1] - model.row_ptr[row]));
-        /* Compute a move for the picked column. */
-        compute_mtm_sat_move(model, slack, sol, objective, sum_slack, row, col_index, best_score, best_move, n_rows);
+    /* Need at least one row! */
+    if (row_range > 0) {
+        for (int move = 0; move < n_moves_per_block; ++move) {
+            //TODO: make sure to pick a satisfied constraint
+            /* Pick a row in our interval. This is uniformly distributed over [my_rows_start,...,my_rows_end). */
+            const int row = my_rows_start + static_cast<int>(row_range * curand_uniform(&state));
+            const int col_index = static_cast<int>(curand_uniform(&state) * (model.row_ptr[row + 1] - model.row_ptr[row]));
+            /* Compute a move for the picked column. */
+            compute_mtm_sat_move(model, slack, sol, objective, sum_slack, row, col_index, best_score, best_move, n_rows);
+        }
     }
 
     /* offload the best move and its score the main memory */
@@ -819,17 +819,16 @@ __global__ void compute_mtm_unsat_moves_kernel(const GpuModelPtrs model, const d
     // int my_rows_end = min(n_cols, (block_idx + 1) * n_rows_per_block);
     const int row_range = size_violated_constraints;
 
-    assert(row_range >= 0);
-    if (row_range == 0)
-        return;
+    /* Need at least one row! */
+    if (row_range > 0) {
+        for (int move = 0; move < n_moves_per_block; ++move) {
+            /* Pick a row in our interval. This is uniformly distributed over [my_rows_start,...,my_rows_end). */
+            const int row = ind_violated_cons[curand(&random_state) % size_violated_constraints];
+            const int col_index = curand(&random_state) % (model.row_ptr[row + 1] - model.row_ptr[row]);
 
-    for (int move = 0; move < n_moves_per_block; ++move) {
-        /* Pick a row in our interval. This is uniformly distributed over [my_rows_start,...,my_rows_end). */
-        const int row = ind_violated_cons[curand(&random_state) % size_violated_constraints];
-        const int col_index = curand(&random_state) % (model.row_ptr[row + 1] - model.row_ptr[row]);
-
-        /* Compute a move for the picked column. */
-        compute_mtm_unsat_move(model, slack, sol, objective, sum_slack, row, col_index, best_score, best_move, n_rows);
+            /* Compute a move for the picked column. */
+            compute_mtm_unsat_move(model, slack, sol, objective, sum_slack, row, col_index, best_score, best_move, n_rows);
+        }
     }
 
     /* offload the best move and its score the main memory */
@@ -851,8 +850,11 @@ __global__ void apply_move(const GpuModelPtrs model, double *slack, double *sol,
     const int col = best_move->col;
 
     const double old_val = sol[col];
-
     assert(model.lb[col] <= val && val <= model.ub[col]);
+
+    if (thread_idx == 0) {
+        printf("Applying move jcol %d [%g, %g] : %g -> %g\n", col, model.lb[col], model.ub[col], old_val, val);
+    }
 
     /* Iterate column and apply changes in slack. */
     const int col_beg = model.row_ptr_trans[col];
@@ -1044,6 +1046,22 @@ void EvolutionSearch::run()
         int min_index = max_iter - best_scores_single_col.begin();
         solution_score score = (*max_iter); // Hidden copy GPU -> CPU
         double min_value = score.feas_score();
+
+        std::string move_name;
+        if (min_index >= 4 * N_BLOCKS_SINGLE_COL_MOVE)
+            move_name = "mtm_sat";
+        else if (min_index >= 3 * N_BLOCKS_SINGLE_COL_MOVE)
+            move_name = "mtm_unsat";
+        else if (min_index >= 2 * N_BLOCKS_SINGLE_COL_MOVE)
+            move_name = "flip";
+        else if (min_index >= 1 * N_BLOCKS_SINGLE_COL_MOVE)
+            move_name = "oneopt";
+        else if (min_index >= 0)
+            move_name = "random";
+        else
+            move_name = "unknown";
+
+        consoleLog("Taking {} move", move_name);
         consoleLog("(idx, score): {} {}", min_index, min_value);
 
         /* Apply best move. */
