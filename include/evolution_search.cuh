@@ -9,6 +9,7 @@ public:
     const GpuModel& model_device;
     int n_random_moves = 100000;
     int n_rounds = 1000;
+    int tabu_tenure = 10;
 
     /* TODO: GPU solution pool. */
 
