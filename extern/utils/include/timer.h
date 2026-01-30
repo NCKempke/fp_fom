@@ -30,7 +30,7 @@ public:
 	/** restart the lap-timer and return the elapsed lap (diff to either creation or last call to lap) */
 	double lap();
 
-	/** stop the stopwatch and return the elapsed time */
+	/** return the elapsed time */
 	double elapsed() const;
 
 private:
@@ -42,6 +42,7 @@ inline StopWatch::StopWatch() : stopwatch_begin(std::chrono::high_resolution_clo
 {
 }
 
+/* Laps are not threadsafe! */
 inline double StopWatch::lap()
 {
 	auto now = std::chrono::high_resolution_clock::now();
@@ -51,6 +52,7 @@ inline double StopWatch::lap()
 	return std::chrono::duration<double>(now - old_lap).count();
 }
 
+/* Elapsed is threadsafe. */
 inline double StopWatch::elapsed() const
 {
 	auto now = std::chrono::high_resolution_clock::now();

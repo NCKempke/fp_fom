@@ -21,22 +21,22 @@
 struct WorkerData
 {
 public:
-	WorkerData(const MIPData &_mipdata) : mipdata{_mipdata}, engine{mipdata}
+	WorkerData(const MIPData &_mipdata) : mipdata{_mipdata}, engine{_mipdata.mip}, solpool(mipdata.mip.ncols, mipdata.mip.objSense, false)
 	{
 		// init propagation engine
 		const MIPInstance &mip = mipdata.mip;
 		engine.add(PropagatorPtr{new CliquesPropagator{mipdata.cliquetable}});
 		engine.add(PropagatorPtr{new ImplPropagator{mipdata.impltable}});
-		engine.add(PropagatorPtr{new LinearPropagator{mipdata}});
+		engine.add(PropagatorPtr{new LinearPropagator{mip}});
 		engine.init(mip.lb, mip.ub, mip.xtype);
-		// set sense in pool
-		solpool.setObjSense(mip.objSense);
 		// clone LP relaxation
 		lp = mipdata.lp->clone();
 	}
 	// data
 	const MIPData &mipdata;
 	PropagationEngine engine;
+
+	/* This worker owns its solution pool exclusively, no thread safety necessary. */
 	SolutionPool solpool;
 	MIPModelPtr lp; //< LP relaxation
 };

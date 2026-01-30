@@ -24,20 +24,31 @@
 class WalkMIP
 {
 public:
-	WalkMIP(const MIPData &_data, const Params &_params, PropagationEngine &_engine);
+	WalkMIP(const MIPInstance &mip, const Params &params, PropagationEngine &_engine);
+
+	void set_max_steps(int max_steps) {
+		maxRepairSteps = max_steps;
+	}
+
 	void walk();
 	void oneOpt();
 
 	~WalkMIP()
 	{
-		consoleLog("Walked {} times", n_walk);
+		// consoleLog("Walked {} times", n_walk);
 	}
 
 private:
 	int n_walk{};
 	// data
-	const MIPData &data;
-	const Params &params;
+	const MIPInstance& mip;
+	/* Parameters. */
+	uint64_t seed;
+	double randomWalkProbability;
+	int maxRepairSteps;
+	int maxRepairNonImprove;
+	double timeLimit;
+
 	PropagationEngine &engine;
 	// state
 	std::mt19937_64 rndgen;

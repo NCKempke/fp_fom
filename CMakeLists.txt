@@ -67,6 +67,8 @@ add_library(fp_lib STATIC
   src/preset_type.cpp
   src/propagation.cpp
   src/ranker_type.cpp
+  src/solpool.cpp
+  src/solution.cpp
   src/solver_type.cpp
   src/table_propagators.cpp
   src/value_chooser_type.cpp

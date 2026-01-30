@@ -12,6 +12,9 @@
  */
 
 #include "mip.h"
+
+#include "solution.h"
+
 #include <consolelog.h>
 #include <fileconfig.h>
 #include <timer.h>
@@ -81,6 +84,19 @@ void pass_lp_to_solver(const MIPInstance& mip, MIPModelPtr model) {
     model->objOffset(mip.objOffset);
 }
 
+SolutionPtr makeFromSpan(const MIPInstance &mip, std::span<const double> x, double objval, bool isFeas, double violation)
+{
+	SolutionPtr sol = std::make_shared<Solution>();
+	sol->x.insert(sol->x.end(), x.begin(), x.end());
+	sol->objval = objval;
+	FP_ASSERT(equal(sol->objval, evalObj(mip, sol->x)));
+	sol->isFeas = isFeas;
+	FP_ASSERT(sol->isFeas == isSolFeasible(mip, sol->x));
+	sol->absViolation = violation;
+	sol->relViolation = violation / mip.maxRhs;
+
+	return sol;
+}
 
 /* Checks whether a given solution vector x is feasible */
 bool isSolFeasible(const MIPInstance &mip, std::span<const double> x)
@@ -127,88 +143,6 @@ double evalObj(const MIPInstance &mip, std::span<const double> x)
 {
 	FP_ASSERT((int)x.size() >= mip.ncols);
 	return dotProduct(mip.obj.data(), x.data(), mip.ncols) + mip.objOffset;
-}
-
-SolutionPtr makeFromSpan(const MIPInstance &mip, std::span<const double> x, double objval, bool isFeas, double violation)
-{
-	SolutionPtr sol = std::make_shared<Solution>();
-	sol->x.insert(sol->x.end(), x.begin(), x.end());
-	sol->objval = objval;
-	FP_ASSERT(equal(sol->objval, evalObj(mip, sol->x)));
-	sol->isFeas = isFeas;
-	FP_ASSERT(sol->isFeas == isSolFeasible(mip, sol->x));
-	sol->absViolation = violation;
-	sol->relViolation = violation / mip.maxRhs;
-
-	return sol;
-}
-
-void SolutionPool::add(SolutionPtr sol)
-{
-	if (!sol)
-		return;
-
-	// avoid adding duplicates
-	auto end = pool.end();
-	auto compEq = [&](const SolutionPtr &other)
-	{
-		return (*sol) == (*other);
-	};
-	auto itr = std::find_if(pool.begin(), pool.end(), compEq);
-	if (itr != end)
-		return;
-
-	// feasible solution are kept sorted by objective and infeasible ones by violation
-	// feasible solutions always come before infeasible ones
-	auto comp = [&](const SolutionPtr &sol1, const SolutionPtr &sol2)
-	{
-		if (sol1->isFeas == sol2->isFeas)
-		{
-			if (sol1->isFeas)
-				return (objSense * sol1->objval < objSense * sol2->objval);
-			else
-				return (sol1->absViolation < sol2->absViolation);
-		}
-		return (sol1->isFeas);
-	};
-	pool.insert(
-		std::upper_bound(pool.begin(), pool.end(), sol, comp),
-		sol);
-
-	// 20 solutions should be enough for our purposes
-	if (pool.size() > 20)
-		pool.resize(20);
-}
-
-static double solDistance(std::span<const double> x1, std::span<const double> x2)
-{
-	double ret = 0.0;
-	FP_ASSERT(x1.size() == x2.size());
-	for (int j = 0; j < x1.size(); j++)
-	{
-		ret += fabs(x1[j] - x2[j]);
-	}
-	return ret;
-}
-
-void SolutionPool::print() const
-{
-	if (pool.empty())
-	{
-		consoleInfo("Empty solution pool");
-		return;
-	}
-
-	consoleInfo("Solution pool: {} solutions", pool.size());
-	consoleLog("{:>8}{:>15}{:>15}{:>15}{:>7}{:>12}{:>8}  {}", "n", "Objective", "RelViolation", "AbsViolation", "Feas", "L1 dist", "Time", "FoundBy");
-
-	SolutionPtr first = pool[0];
-	for (int k = 0; k < pool.size(); k++)
-	{
-		SolutionPtr sol = pool[k];
-		consoleLog("{:>8}{:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>12.2f}{:>8.2f}  {}",
-				   k, sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, solDistance(first->x, sol->x), sol->timeFound, sol->foundBy);
-	}
 }
 
 /* sort variables in a row by type ('B','I','C') and within each
@@ -943,8 +877,8 @@ std::vector<double> solveLP(MIPModelPtr model, const Params &params, bool enable
 	return x;
 }
 
-MIPData::MIPData(MIPInstance&& mip_, MIPModelPtr lp_solver, bool build_clique_cover) : mip(std::move(mip_)), lp(lp_solver) {
-	solpool.setObjSense(mip.objSense);
+/* Constructor used by mipcomp binary. Initialize solution pool as thread-safe*/
+MIPData::MIPData(MIPInstance&& mip_, MIPModelPtr lp_solver, bool build_clique_cover) : mip(std::move(mip_)), lp(lp_solver), solpool(mip.ncols, mip.objSense, true) {
 	dualBound = -INFTY * mip.objSense;
 
 	// normalize rows
@@ -966,10 +900,8 @@ MIPData::MIPData(MIPInstance&& mip_, MIPModelPtr lp_solver, bool build_clique_co
 }
 
 // Init MIP Data from a MIP model
-MIPData::MIPData(MIPModelPtr model, bool build_clique_cover)
+MIPData::MIPData(MIPModelPtr model, bool build_clique_cover) : mip(extract(model)), solpool(mip.ncols, mip.objSense, false)
 {
-	mip = extract(model);
-	solpool.setObjSense(mip.objSense);
 	dualBound = -INFTY * mip.objSense;
 
 	// normalize rows

@@ -14,6 +14,7 @@
 #include "dfs.h"
 #include "strategies.h"
 #include "linear_propagator.h"
+#include "solution.h"
 #include "table_propagators.h"
 #include "tool_app.h"
 #include "thread_pool.h"
@@ -50,81 +51,6 @@
 static const unsigned int MIN_NUMBER_OF_INPUTS = 1;
 std::mutex globalMutex;
 
-static void runDFS(WorkerDataPtr worker, Params params, int trial)
-{
-	const MIPData &data{worker->mipdata};
-	const MIPInstance &mip{data.mip};
-	PropagationEngine &engine{worker->engine};
-	SolutionPool &pool{worker->solpool};
-	const Domain &domain = engine.getDomain();
-	int n = mip.ncols;
-	FP_ASSERT(n == domain.ncols());
-
-	params.seed = params.seed + 117 * trial;
-	if (params.maxNodes == -1)
-		params.maxNodes = std::max(params.minNodes, n + 1);
-
-	consoleLog("DFS {}-{} seed={}", toString(params.ranker), toString(params.valueChooser), params.seed);
-
-	// Create ranker and value chooser
-	RankerPtr ranker = makeRanker(params.ranker, params, data);
-	ValuePtr chooser = makeValueChooser(params.valueChooser, params, data);
-	FP_ASSERT(ranker);
-	FP_ASSERT(chooser);
-
-	// Use either old or new branching strategy.
-	std::unique_ptr<DFSStrategy> strategy;
-
-	if (params.useOldBranching)
-	{
-		strategy = std::make_unique<BranchSimple>(data);
-		dynamic_cast<BranchSimple &>(*strategy).setup(domain, ranker, chooser);
-	}
-	else
-	{
-		strategy = std::make_unique<BranchNew>(data);
-		dynamic_cast<BranchNew &>(*strategy).setup(domain, ranker, chooser);
-	}
-
-	Domain::iterator mark = engine.mark();
-	dfsSearch(worker, params, *strategy);
-
-	// final and longer repair if still infeasible
-	if (!pool.hasFeas() && pool.hasSols())
-	{
-		// load solution into engine
-		SolutionPtr sol = pool.getSols()[0];
-		FP_ASSERT(sol);
-		for (int j = 0; j < n; j++)
-			engine.fix(j, sol->x[j]);
-		double oldViol = engine.violation();
-		FP_ASSERT(oldViol > 0.0);
-
-		consoleLog("Final repair attempt");
-		params.maxRepairSteps *= 5;
-		WalkMIP repair(data, params, engine);
-		repair.walk();
-		double newViol = engine.violation();
-		consoleLog("Final repair outcome: viol {} -> {}", oldViol, newViol);
-
-		// add to pool if the new solution is 'better' w.r.t. to feasibility
-		if (newViol < oldViol)
-		{
-			std::vector<double> x{domain.lbs().begin(), domain.lbs().end()};
-			double objval = evalObj(mip, x);
-			bool isFeas = isSolFeasible(mip, x);
-			sol = makeFromSpan(mip, x, objval, isFeas, newViol);
-
-			sol->timeFound = gStopWatch().elapsed();
-			const std::string strat_name = fmt::format("{}_{}", toString(params.ranker), toString(params.valueChooser));
-			sol->foundBy = strat_name;
-			pool.add(sol);
-		}
-	}
-
-	engine.undo(mark);
-}
-
 static void runSingleHeuristicParallel(
 	MIPData &data,
 	WorkerDataManager &wManager,
@@ -135,8 +61,11 @@ static void runSingleHeuristicParallel(
 
 	WorkerDataPtr worker = wManager.get();
 
+    if (params.maxNodes == -1)
+        params.maxNodes = std::max(params.minNodes, data.mip.ncols + 1);
+
 	/*  Run the heuristic. */
-	runDFS(worker, params, 0);
+	runDFS(worker->mipdata, worker->engine, worker->solpool, worker->lp, params);
 
 	/* merge local solution pool into global one */
 	std::lock_guard lock{globalMutex};
@@ -176,15 +105,19 @@ static void runPortfolio(MIPData &data, const Params &params)
 	consoleLog("");
 	consoleInfo("Heuristics done after {}s [sols={} feas={}]",
 				gStopWatch().elapsed(),
-				solpool.getSols().size(),
+				solpool.n_sols(),
 				solpool.hasFeas());
 }
 
 /* Run user specified heuristic. */
-static void runSingleHeuristic(MIPData &data, const Params &params)
+static void runSingleHeuristic(MIPData &data, Params params)
 {
 	SolutionPool &solpool{data.solpool};
 
+	if (params.maxNodes == -1)
+		params.maxNodes = std::max(params.minNodes, data.mip.ncols + 1);
+
+	const uint64_t seed_orig = params.seed;
 	int tries = 0;
 	while (tries < params.maxTries)
 	{
@@ -192,9 +125,10 @@ static void runSingleHeuristic(MIPData &data, const Params &params)
 		Domain::iterator mark = worker->engine.mark();
 
 		worker->engine.undo(mark);
+		params.seed = seed_orig + tries;
 
 		/*  Run the heuristic. */
-		runDFS(worker, params, tries++);
+		runDFS(worker->mipdata, worker->engine, worker->solpool, worker->lp, params);
 
 		/* merge local solution pool into global one */
 		data.solpool.merge(worker->solpool);
@@ -306,24 +240,23 @@ protected:
 	{
 		std::vector<double> postsolved_sol;
 		double obj = 0.0;
-		SolutionPtr best_sol;
+		Solution best_sol;
 
 		if (data.solpool.hasFeas())
 		{
 			consoleLog("Postsolving incumbent");
 			best_sol = data.solpool.getIncumbent();
-			FP_ASSERT(best_sol);
 		}
 		else
 			consoleInfo("No feasible solution available!");
 
-		if (best_sol != NULL) {
-			obj = best_sol->objval;
+		if (!best_sol.x.empty()) {
+			obj = best_sol.objval;
 
 			if (was_presolved) {
 				consoleLog("Time starting postsolve = {}", gStopWatch().elapsed());
 				gStopWatch().lap();
-				postsolved_sol = model->postsolveSolution(best_sol->x);
+				postsolved_sol = model->postsolveSolution(best_sol.x);
 				consoleLog("Time finished postsolve = {}", gStopWatch().elapsed());
 				consoleInfo("Postsolve time = {}", gStopWatch().lap());
 
@@ -332,7 +265,7 @@ protected:
 				FP_ASSERT(isSolFeasible(origMip, postsolved_sol));
 			} else {
 				consoleLog("No presolve executed; skipping postsolve.");
-				postsolved_sol = best_sol->x;
+				postsolved_sol = std::move(best_sol.x);
 			}
 		}
 
@@ -497,10 +430,10 @@ protected:
 
 		/* Initialized propagators and do one round of propagation. */
 		const MIPInstance &mip = data.mip;
-		PropagationEngine engine{data};
+		PropagationEngine engine{mip};
 		engine.add(PropagatorPtr{new CliquesPropagator{data.cliquetable}});
 		engine.add(PropagatorPtr{new ImplPropagator{data.impltable}});
-		engine.add(PropagatorPtr{new LinearPropagator{data}});
+		engine.add(PropagatorPtr{new LinearPropagator{mip}});
 		engine.init(mip.lb, mip.ub, mip.xtype);
 		const Domain &domain = engine.getDomain();
 		bool infeas = engine.propagate(true);

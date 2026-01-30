@@ -205,7 +205,7 @@ public:
 		const auto &rowInd = matrix.ind;
 
 		FP_ASSERT(data.reduced_costs.size() >= data.mip.ncols);
-		FP_ASSERT(rowBeg.size() == data.mip.nrows);
+		FP_ASSERT(rowBeg.size() == data.mip.nrows + 1);
 
 		for (int iRow = 0; iRow < data.mip.nrows; ++iRow)
 		{

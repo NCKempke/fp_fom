@@ -162,6 +162,7 @@ __device__ solution_score compute_score_single_col_move(const GpuModelPtrs &mode
     const double delta_obj = delta * obj_coef;
     double slack_change_thread = 0.0;
 
+    assert(model.lb[col] <= move.val && move.val <= model.ub[col]);
     // if (thread_idx == 0)
     // {
     //     printf("fixval: %g; colval: %g\n", move.val, col_val);
@@ -303,6 +304,10 @@ __device__ void compute_random_move(const GpuModelPtrs &model, curandState &stat
     /* Make sure shared memory is visible to all threads in the block. */
     __syncthreads();
 
+    /* Don't run if these are too close. */
+    if (ub - lb < 0.001)
+        return;
+
     // TODO: fixval != col_val
     double fixval = lb + (ub - lb) * random_val;
 
@@ -342,6 +347,8 @@ __device__ void compute_oneopt_move(const GpuModelPtrs &model, curandState &stat
     /* Only do this for variables with non-zero objective. */
     if ((is_gt(obj, 0.0) && is_eq(col_val, lb)) || (is_lt(obj, 0.0) && is_eq(col_val, ub)) || is_eq(obj, 0.0))
         return;
+
+    assert(lb <= col_val && col_val <= ub);
 
     /* Positive stepsize in objective direction. */
     double stepsize = DBL_MAX;
@@ -845,6 +852,8 @@ __global__ void apply_move(const GpuModelPtrs model, double *slack, double *sol,
 
     const double old_val = sol[col];
 
+    assert(model.lb[col] <= val && val <= model.ub[col]);
+
     /* Iterate column and apply changes in slack. */
     const int col_beg = model.row_ptr_trans[col];
     const int col_end = model.row_ptr_trans[col + 1];
@@ -893,6 +902,10 @@ struct IsViolated {
 void EvolutionSearch::run()
 {
     std::vector<double> sol_host(model_host.ncols, 0.0);
+
+    for (int jcol = 0; jcol < model_host.ncols; ++jcol)
+        sol_host[jcol] = max(model_host.lb[jcol], min(sol_host[jcol], model_host.ub[jcol]));
+
     std::vector<double> slacks_host = model_host.rhs;
     double sum_slack = 0.0;
     thrust::device_vector<int64_t> cub_n_selected(1);
@@ -947,6 +960,8 @@ void EvolutionSearch::run()
      *
      *
      */
+
+    // TODO: sort ints and bins/extract them. Many moves only make sense for ints and bins!
 
     consoleLog("Initial slack     {}", sum_slack);
     consoleLog("Initial objective {}", objective);

@@ -119,7 +119,7 @@ using PropagatorPtr = std::shared_ptr<PropagatorI>;
 class PropagationEngine
 {
 public:
-	PropagationEngine(const MIPData &_data);
+	PropagationEngine(const MIPInstance& mip);
 	/* Add a propagator to the engine */
 	void add(PropagatorPtr prop) { propagators.push_back(prop); }
 	/* Get a propagator by name */
@@ -157,7 +157,8 @@ public:
 	void debugChecks() const;
 
 protected:
-	const MIPData &data;
+	const MIPInstance& mip;
+
 	Domain domain;
 	std::vector<PropagatorPtr> propagators;
 	// state
