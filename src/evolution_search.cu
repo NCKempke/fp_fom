@@ -575,6 +575,7 @@ __device__ void compute_mtm_unsat_move(const GpuModelPtrs &model, const TabuSear
 
     if (is_row_feas)
         return;
+    assert(slack_for_row != 0);
 
     const int col = model.col_idx[model.row_ptr[row] + col_index];
     double coeff = model.row_val[model.row_ptr[row] + col_index];
@@ -599,7 +600,7 @@ __device__ void compute_mtm_unsat_move(const GpuModelPtrs &model, const TabuSear
     }
 
     /* Skip if colum is at already at the bound we want to move it towards. */
-    if ((move_up && is_eq(ub, old_val)) || (is_eq(lb, old_val)))
+    if ((move_up && is_eq(ub, old_val)) || (!move_up && is_eq(lb, old_val)))
         return;
 
     assert(coeff != 0.0);
@@ -616,8 +617,9 @@ __device__ void compute_mtm_unsat_move(const GpuModelPtrs &model, const TabuSear
         fix_val = move_up ? ceil(fix_val) : floor(fix_val);
     fix_val = fmin(fmax(fix_val, lb), ub);
 
-    // printf("row %d col %d old %d  new %d %d\n", row, col,  old_val, fix_val);
-
+    // if (threadIdx.x == 0) {
+    //     printf("col %d  row %d fixval %g old %g slack %g\n", col, row, fix_val, old_val, slack_for_row );
+    // }
     /* score is valid only for threadIdx.x == 0 */
     score = compute_score_single_col_move(model, args, {fix_val, col});
 
@@ -1102,9 +1104,9 @@ void EvolutionSearch::run()
         args_device.iter = i_round;
 
         /* Each kernel and block get assigned as this rounds random seed:
-         * n_rounds * (MOVES * BLOCKS) + BLOCKS * i_move + i_block
+         * i_rounds * (MOVES * BLOCKS) + BLOCKS * i_move + i_block
          */
-        args_device.random_seed = (AVAILABLE_MOVES * N_MAX_BLOCKS_PER_MOVE) * n_rounds;
+        args_device.random_seed = (AVAILABLE_MOVES * N_MAX_BLOCKS_PER_MOVE) * i_round;
         int nmoves = 1e4;
 
         thrust::sequence(data_device.violated_constraints.begin(), data_device.violated_constraints.end()); /* Set to 0,1,...,nrows-1. */
@@ -1118,12 +1120,10 @@ void EvolutionSearch::run()
         args_device.n_violated = partition_point - data_device.violated_constraints.begin();
         consoleLog("Found {} violated constraints", args_device.n_violated);
 
-        /* ----- */
-        // auto indi = violated_constraints;
-        // for ( int index: indi) {
-        //     consoleLog("{} ",  index);
-        // }
 
+         // for ( int i = 0; i < args_device.n_violated; i++) {
+        //     consoleLog("Index: {}",data_device.violated_constraints[i]);
+        //
         /* Compute best move for each block. */
         compute_random_moves_kernel<0><<<N_BLOCKS_SINGLE_COL_MOVE, BLOCKSIZE_SINGLE_COL_MOVE>>>(
             gpu_model_ptrs, args_device, nmoves);
@@ -1140,8 +1140,8 @@ void EvolutionSearch::run()
         compute_mtm_sat_moves_kernel<4><<<N_BLOCKS_SINGLE_COL_MOVE, BLOCKSIZE_SINGLE_COL_MOVE>>>(
             gpu_model_ptrs, args_device, nmoves);
 
-        // // /* ----- */
-        // thrust::host_vector<solution_score> host_scores = best_scores_single_col;
+        // /* ----- */
+        // thrust::host_vector<solution_score> host_scores = data_device.best_scores_single_col;
         // for ( auto &[objective, violation]: host_scores) {
         //     consoleLog("{} {}", objective, violation);
         // }
@@ -1157,6 +1157,7 @@ void EvolutionSearch::run()
         int min_index = max_iter - data_device.best_scores_single_col.begin();
         solution_score score = (*max_iter); // Hidden copy GPU -> CPU
         double min_value = score.feas_score();
+        assert(min_value != DBL_MAX);
 
         std::string move_name;
         if (min_index >= 4 * N_BLOCKS_SINGLE_COL_MOVE)
