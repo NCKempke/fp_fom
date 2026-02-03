@@ -2,11 +2,12 @@
 
 #include "gpu_data.cuh"
 #include "mip.h"
+#include "utils.cuh"
 
 #include <consolelog.h>
 
-#include <curand_kernel.h>
 #include <cuda_runtime.h>
+#include <curand_kernel.h>
 #include <cmath>
 
 #include <thrust/copy.h>
@@ -21,12 +22,71 @@
 #include "cub/cub.cuh"
 #include <cub/util_device.cuh>
 
+
+/* We submit blocks with WARPS_PER_BLOCK many warps. Each warp is responsible for computing N_MOVES_PER_WARP many moves.
+ * To compute n_moves of a certain move type, we need to submit
+ *
+ *    (n_moves + N_MOVES_PER_SINGLE_COL_BLOCK - 1) / N_MOVES_PER_SINGLE_COL_BLOCK
+ *
+ * blocks.
+ */
+constexpr int WARPSIZE = 32;
+constexpr int BLOCKSIZE_SINGLE_COL_MOVE = 256;
+
+constexpr int N_WARPS_PER_SINGLE_COL_BLOCK = BLOCKSIZE_SINGLE_COL_MOVE / WARPSIZE;
+static_assert(BLOCKSIZE_SINGLE_COL_MOVE % WARPSIZE == 0);
+
+constexpr int N_MOVES_PER_WARP = 16;
+constexpr int N_MOVES_PER_SINGLE_COL_BLOCK = N_MOVES_PER_WARP * N_WARPS_PER_SINGLE_COL_BLOCK;
+
 constexpr int N_MAX_BLOCKS_PER_MOVE = 512;    /* Maximum number of blocks used for any move kernel */
 constexpr int BLOCKSIZE_VECTOR_KERNEL = 1024; /* Blocksize used for vector kernels (each thread operating on one vector element). */
 
 constexpr int N_BLOCKS_SINGLE_COL_MOVE = 512;
-constexpr int BLOCKSIZE_SINGLE_COL_MOVE = 32;
 constexpr int AVAILABLE_MOVES = 5;
+
+/* For a given interval of sampling candidates [1,..,n_candidates) (e.g. rows or columns) and n_samples total to be computed samples,
+ * determine for each warp in this block its assigned sampling range and its assigned number of samples. Returns {beg, end, n_samples}. */
+__device__ inline std::tuple<int, int, int> get_warp_sampling_range(int n_candidates, int n_samples) {
+    int start = 0;
+    int end = 0;
+    int n_samples_warp = N_MOVES_PER_WARP;
+
+    const int block_idx = blockIdx.x;
+    const int thread_idx = threadIdx.x;
+
+    const int warp_id_block = thread_idx / WARPSIZE;
+    const int warp_id_global = block_idx * N_WARPS_PER_SINGLE_COL_BLOCK + warp_id_block;
+
+    /* Only the first n_active_warps actually compute samples. */
+    const int n_active_warps = (n_samples + N_MOVES_PER_WARP - 1) / N_MOVES_PER_WARP;
+
+    if (warp_id_global >= n_active_warps) {
+        return {start, end, n_samples_warp};
+    }
+
+    if (warp_id_global == n_active_warps - 1) {
+        n_samples_warp = n_samples_warp - (n_active_warps - 1) * N_MOVES_PER_WARP;
+    }
+    assert(n_samples_warp > 0);
+
+    /* Partition [1,..,n_candidates) among all active warps. */
+    const int base = n_candidates / n_active_warps;
+    const int rem = n_candidates % n_active_warps;
+
+    if (warp_id_global < rem) {
+        start = warp_id_global * (base + 1);
+        end = start + (base + 1);
+    } else {
+        start = rem * (base + 1) + (warp_id_global - rem) * base;
+        end   = start + base;
+    }
+
+    start = min(start, n_candidates);
+    end = min(end, n_candidates);
+
+    return {start, end, n_samples_warp};
+}
 
 /* Moves:
  * - one_opt (feas)   : implemented not applied
@@ -50,9 +110,6 @@ constexpr int AVAILABLE_MOVES = 5;
  * - Scoring function;
  * - Apply "all" for "small" problems instead of random
  */
-
-constexpr double FEASTOL = 1e-6;
-constexpr double EPSILON = 1e-9;
 
 struct single_col_move
 {
@@ -79,126 +136,6 @@ struct move_score
         return /* objective +*/ weighted_violation_change;
     }
 };
-
-// TODO : move to utils header
-#define assert_iff(prop1, prop2) (assert((prop1) == (prop2)))
-#define assert_if_then(antecedent, consequent) (assert(!(antecedent) || (consequent)))
-#define assert_if_then_else(cond, then_expr, else_expr) (assert((!(cond) || (then_expr)) && ((cond) || (else_expr))))
-
-// functions for comparisons with absolute tolerance only
-__device__ __host__ bool is_zero(double a)
-{
-    return abs(a) <= EPSILON;
-}
-
-__device__ __host__ bool is_eq(double a, double b)
-{
-    return abs(a - b) <= EPSILON;
-}
-
-__device__ __host__ bool is_integer(double a)
-{
-    return is_eq(round(a), a);
-}
-
-__device__ __host__ bool is_ge(double a, double b)
-{
-    // a >= b considering tolerance
-    return a - b >= -EPSILON;
-}
-
-__device__ __host__ bool is_gt(double a, double b)
-{
-    // a >= b considering tolerance
-    return a - b > EPSILON;
-}
-
-__device__ __host__ bool is_le(double a, double b)
-{
-    // a <= b considering tolerance
-    return a - b <= EPSILON;
-}
-
-__device__ __host__ bool is_lt(double a, double b)
-{
-    // a <= b considering tolerance
-    return a - b < -EPSILON;
-}
-
-__device__ __host__ bool is_zero_feas(double a)
-{
-    return abs(a) <= FEASTOL;
-}
-
-__device__ __host__ bool is_eq_feas(double a, double b)
-{
-    return abs(a - b) <= FEASTOL;
-}
-
-__device__ __host__ bool is_ge_feas(double a, double b)
-{
-    // a >= b considering tolerance
-    return a - b >= -FEASTOL;
-}
-
-__device__ __host__ bool is_le_feas(double a, double b)
-{
-    // a <= b considering tolerance
-    return a - b <= FEASTOL;
-}
-
-__device__ __host__ bool is_gt_feas(double a, double b)
-{
-    // a >= b considering tolerance
-    return a - b > FEASTOL;
-}
-
-__device__ __host__ bool is_lt_feas(double a, double b)
-{
-    // a <= b considering tolerance
-    return a - b < -FEASTOL;
-}
-
-/** Initialize the random state for the whole block, given a seed. Should only be called from thread 0. */
-__device__ void init_curand_block(curandState &state, size_t seed)
-{
-    curand_init(seed, blockIdx.x, 0, &state);
-}
-
-/** Returns, for the whole block, a random double in [beg, end]. */
-__device__ double get_random_double_in_range_block(curandState &state, double beg, double end)
-{
-    __shared__ double randval;
-
-    if (threadIdx.x == 0)
-        randval = beg + curand_uniform_double(&state) * (end - beg);
-    __syncthreads();
-
-    return randval;
-}
-
-/** Returns, for the whole block, a random integer between [0,..,n) excluding n. State is this block's curand state. */
-__device__ int get_random_int_block(curandState &state, int n)
-{
-    __shared__ int randval;
-
-    if (threadIdx.x == 0)
-    {
-        if (n > 0) {
-            unsigned int r = curand(&state);
-            randval = r % n;
-        } else {
-            randval = 0;
-        }
-    }
-    __syncthreads();
-
-    assert(0 <= randval);
-    if (n != 0)
-        assert(randval < n);
-
-    return randval;
-}
 
 /* Return whether a column was marked tabu. */
 __device__ inline bool is_tabu(const int *tabu_col, int col, int iter, int tabu_tenure)
