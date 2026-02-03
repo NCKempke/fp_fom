@@ -9,18 +9,15 @@
 #include <cuda_runtime.h>
 #include <cmath>
 
-#include <thrust/copy.h>
 #include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
 #include <thrust/extrema.h>
-#include <thrust/tuple.h>
 #include <thrust/host_vector.h>
 #include <thrust/inner_product.h>
 #include <thrust/partition.h>
 #include <thrust/sequence.h>
 
 #include "cub/cub.cuh"
-#include <cub/util_device.cuh>
 
 constexpr int N_MAX_BLOCKS_PER_MOVE = 512;    /* Maximum number of blocks used for any move kernel */
 constexpr int BLOCKSIZE_VECTOR_KERNEL = 1024; /* Blocksize used for vector kernels (each thread operating on one vector element). */
@@ -619,9 +616,9 @@ __device__ void compute_mtm_unsat_move(const GpuModelPtrs &model, const TabuSear
         fix_val = move_up ? ceil(fix_val) : floor(fix_val);
     fix_val = fmin(fmax(fix_val, lb), ub);
 
-    if (threadIdx.x == 0) {
-        printf("col %d  row %d fixval %g old %g slack %g\n", col, row, fix_val, old_val, slack_for_row );
-    }
+    // if (threadIdx.x == 0) {
+    //     printf("col %d  row %d fixval %g old %g slack %g\n", col, row, fix_val, old_val, slack_for_row );
+    // }
     /* score is valid only for threadIdx.x == 0 */
     score = compute_score_single_col_move(model, args, {fix_val, col});
 
@@ -1024,28 +1021,6 @@ __global__ void csr_spmv_kernel(
 
     y[row] += alpha * sum;
 }
-
-struct SlackViolation
-{
-    const char* sense;
-
-    __host__ __device__
-    double operator()(const thrust::tuple<double,int>& t) const
-    {
-        double slack = thrust::get<0>(t);
-        int i        = thrust::get<1>(t);
-
-        char s = sense[i];
-
-        if (s == 'L' && is_lt_feas(slack, 0.0))
-            return fabs(slack);
-
-        if (s == 'E' && !is_eq_feas(slack, 0.0))
-            return fabs(slack);
-
-        return 0.0;
-    }
-};
 
 double thrust_dot_product(const thrust::device_vector<double> &a,
                           const thrust::device_vector<double> &b)
