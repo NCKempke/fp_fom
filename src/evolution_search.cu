@@ -804,7 +804,7 @@ __global__ void compute_oneopt_moves_kernel(const GpuModelPtrs model, TabuSearch
         /* Set random seed to 0. */
         init_curand_block(random_state, args.random_seed + KERNEL_SEQUENCE * N_MAX_BLOCKS_PER_MOVE);
         best_move = {0.0, -1};
-        best_score = {DBL_MAX, DBL_MAX};
+        best_score = {DBL_MAX, DBL_MAX, DBL_MAX};
     }
     __syncthreads();
 
@@ -858,7 +858,7 @@ __global__ void compute_flip_moves_kernel(const GpuModelPtrs model, TabuSearchKe
 
         /* Set random seed to 0. */
         best_move = {0.0, -1};
-        best_score = {DBL_MAX, DBL_MAX};
+        best_score = {DBL_MAX, DBL_MAX, DBL_MAX};
     }
     __syncthreads();
 
@@ -910,14 +910,13 @@ __global__ void compute_mtm_sat_moves_kernel(const GpuModelPtrs model, TabuSearc
     {
         init_curand_block(random_state, args.random_seed + KERNEL_SEQUENCE * N_MAX_BLOCKS_PER_MOVE);
         best_move = {0.0, -1};
-        best_score = {DBL_MAX, DBL_MAX};
+        best_score = {DBL_MAX, DBL_MAX, DBL_MAX};
     }
     __syncthreads();
 
     // int violated_count = end - valid_idx.begin();
 
     int n_rows = args.nrows;
-    int n_cols = args.ncols;
     int n_rows_per_block = (n_rows + grid_dim - 1) / grid_dim;
     // TODO: this is not quite exact
     int n_moves_per_block = (n_moves + grid_dim - 1) / grid_dim;
@@ -968,7 +967,7 @@ __global__ void compute_mtm_unsat_moves_kernel(const GpuModelPtrs model, TabuSea
     {
         init_curand_block(random_state, args.random_seed + KERNEL_SEQUENCE * N_MAX_BLOCKS_PER_MOVE);
         best_move = {0.0, -1};
-        best_score = {DBL_MAX, DBL_MAX};
+        best_score = {DBL_MAX, DBL_MAX, DBL_MAX};
     }
     __syncthreads();
 
@@ -1208,7 +1207,7 @@ void EvolutionSearch::run()
          * i_rounds * (MOVES * BLOCKS) + BLOCKS * i_move + i_block
          */
         args_device.random_seed = (AVAILABLE_MOVES * N_MAX_BLOCKS_PER_MOVE) * i_round;
-        int nmoves = 1e4;
+        int nmoves = 1e5;
 
         thrust::sequence(data_device.violated_constraints.begin(), data_device.violated_constraints.end()); /* Set to 0,1,...,nrows-1. */
 
@@ -1267,7 +1266,7 @@ void EvolutionSearch::run()
             consoleLog("No more good moves; updating weights!");
             const int n_blocks = (model_host.nrows + BLOCKSIZE_VECTOR_KERNEL - 1) / BLOCKSIZE_VECTOR_KERNEL;
             /* Update the weigths and continue!  */
-            update_weights_kernel<<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(gpu_model_ptrs, args_device, false, 0.001);
+            update_weights_kernel<<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(gpu_model_ptrs, args_device, false, 0.0001);
             continue;
         }
 
