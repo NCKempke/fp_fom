@@ -5,6 +5,10 @@
 
 constexpr double FEASTOL = 1e-6;
 constexpr double EPSILON = 1e-9;
+constexpr int WARP_SIZE = 32;
+constexpr int WARP_SIZE_HALF = WARP_SIZE / 2;
+
+#define FULL_WARP_MASK 0xffffffff
 
 #define assert_iff(prop1, prop2) (assert((prop1) == (prop2)))
 #define assert_if_then(antecedent, consequent) (assert(!(antecedent) || (consequent)))
@@ -84,30 +88,68 @@ __device__ __host__ bool is_lt_feas(double a, double b)
     return a - b < -FEASTOL;
 }
 
-/** Initialize the random state for the whole block, given a seed. Should only be called from thread 0. */
-__device__ void init_curand_block(curandState &state, size_t seed)
+/* TODO: reduction operation should be a template, too. */
+
+/* Compute min(val) within the warp. Assumes that full warp participates. */
+template <typename VAL_TYPE> __inline__ __device__ VAL_TYPE warp_min_reduce(VAL_TYPE val)
 {
-    curand_init(seed, blockIdx.x, 0, &state);
+#if __CUDA_ARCH__ >= 800
+  return __reduce_min_sync(FULL_WARP_MASK, (unsigned)val);
+#else
+  /* Fallback: implement warp-level min reduction manually. */
+  for (int offset = WARP_SIZE_HALF; offset > 0; offset /= 2)
+    val = min(val, __shfl_down_sync(FULL_WARP_MASK, val, offset));
+
+  /* Broadcast back the result from lane 0. */
+  return __shfl_sync(FULL_WARP_MASK, val, 0);
+#endif
+}
+
+/* Compute min(val) within the warp. Assumes that full warp participates. */
+template <typename VAL_TYPE> __inline__ __device__ VAL_TYPE warp_sum_reduce(VAL_TYPE val)
+{
+#if __CUDA_ARCH__ >= 800
+  return __reduce_min_sync(FULL_WARP_MASK, (unsigned)val);
+#else
+  /* Fallback: implement warp-level min reduction manually. */
+  for (int offset = WARP_SIZE_HALF; offset > 0; offset /= 2)
+    val += __shfl_down_sync(FULL_WARP_MASK, val, offset);
+
+  /* Broadcast back the result from lane 0. */
+  return __shfl_sync(FULL_WARP_MASK, val, 0);
+#endif
+}
+
+/** Initialize the random state for the whole block, given a seed. Should only be called from thread 0. */
+template <const int WARPS_PER_BLOCK>
+__device__ void init_curand_warp(curandState &state, size_t seed)
+{
+    const int warp_id = threadIdx.x / WARP_SIZE;
+
+    curand_init(seed, blockIdx.x * WARPS_PER_BLOCK + warp_id, 0, &state);
 }
 
 /** Returns, for the whole block, a random double in [beg, end]. */
-__device__ double get_random_double_in_range_block(curandState &state, double beg, double end)
+__device__ double get_random_double_in_range_warp(curandState &state, double beg, double end)
 {
-    __shared__ double randval;
+    const int thread_idx_warp = threadIdx.x % WARP_SIZE;
+    double randval = 0.0;
 
-    if (threadIdx.x == 0)
+    if (thread_idx_warp == 0)
         randval = beg + curand_uniform_double(&state) * (end - beg);
-    __syncthreads();
+
+    randval = __shfl_sync(FULL_WARP_MASK, randval, 0);
 
     return randval;
 }
 
 /** Returns, for the whole block, a random integer between [0,..,n) excluding n. State is this block's curand state. */
-__device__ int get_random_int_block(curandState &state, int n)
+__device__ int get_random_int_warp(curandState &state, int n)
 {
-    __shared__ int randval;
+    const int thread_idx_warp = threadIdx.x % WARP_SIZE;
+    int randval;
 
-    if (threadIdx.x == 0)
+    if (thread_idx_warp == 0)
     {
         if (n > 0) {
             unsigned int r = curand(&state);
@@ -116,11 +158,7 @@ __device__ int get_random_int_block(curandState &state, int n)
             randval = 0;
         }
     }
-    __syncthreads();
-
-    assert(0 <= randval);
-    if (n != 0)
-        assert(randval < n);
+    randval = __shfl_sync(FULL_WARP_MASK, randval, 0);
 
     return randval;
 }
