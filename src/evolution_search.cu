@@ -45,6 +45,38 @@ constexpr int BLOCKSIZE_VECTOR_KERNEL = 1024; /* Blocksize used for vector kerne
 constexpr int N_BLOCKS_SINGLE_COL_MOVE = 512;
 constexpr int AVAILABLE_MOVES = 5;
 
+/* For multi-armed bandit maybe. */
+using moves_distribution = std::array<int, AVAILABLE_MOVES>;
+using moves_probability = std::array<double, AVAILABLE_MOVES>;
+
+enum class move_type {
+    random = 0,
+    oneopt,
+    oneopt_greedy,
+    flip,
+    mtm_unsat,
+    mtm_sat
+};
+
+const char* to_string(move_type m) {
+    switch (m) {
+        case move_type::random:
+            return "random";
+        case move_type::oneopt:
+            return "oneopt";
+        case move_type::oneopt_greedy:
+            return "oneopt_greedy";
+        case move_type::flip:
+            return "flip";
+        case move_type::mtm_unsat:
+            return "mtm_unsat";
+        case move_type::mtm_sat:
+            return "mtm_sat";
+        default:
+            return "unknown";
+    }
+}
+
 /* For a given interval of sampling candidates [1,..,n_candidates) (e.g. rows or columns) and n_samples total to be computed samples,
  * determine for each warp in this block its assigned sampling range and its assigned number of samples. Returns {beg, end, n_samples}. */
 __device__ inline std::tuple<int, int, int> get_warp_sampling_range(int n_candidates, int n_samples) {
@@ -1068,8 +1100,50 @@ struct IsViolated
     }
 };
 
+/* Given n_samples, the amount of total to be sampled moves, assign a fraction of total samples to each class of moves according to probabilities. */
+moves_distribution distribute_samples(int n_samples, const moves_probability& probabilities)
+{
+    moves_distribution out{};
+    std::array<double, AVAILABLE_MOVES> exact{};
+    std::array<double, AVAILABLE_MOVES> frac{};
+
+    int assigned = 0;
+
+    /* Compute exact allocations and round down for now. Count the amount of total assigned samples and the fractionality of each rounded assignment. */
+    for (int i = 0; i < AVAILABLE_MOVES; ++i) {
+        exact[i] = probabilities[i] * static_cast<double>(n_samples);
+        out[i] = static_cast<int>(std::floor(exact[i]));
+        frac[i] = exact[i] - out[i];
+        assigned += out[i];
+    }
+
+    /* Now, distribute the remainders from highest do lowest fractionality. */
+    int remaining = n_samples - assigned;
+
+    /* This loop might be expensive for many remaining or large amounts of moves. But for our purposes it should be fine. */
+    while (remaining > 0) {
+        int best = 0;
+        for (int i = 1; i < AVAILABLE_MOVES; ++i) {
+            if (frac[i] > frac[best]) {
+                best = i;
+            }
+        }
+        out[best] += 1;
+        frac[best] = 0.0;
+        --remaining;
+    }
+
+    return out;
+}
+
 void EvolutionSearch::run()
 {
+    moves_probability probabilties{};
+    /* Initialize probabilties for mulit-armed bandit evenly. */
+    const double w = 1.0 / static_cast<double>(AVAILABLE_MOVES);
+    for (int i = 0; i < AVAILABLE_MOVES; ++i)
+        probabilties[i] = w;
+
     auto gpu_model_ptrs = model_device.get_ptrs();
     TabuSearchDataDevice data_device(model_host.nrows, model_host.ncols, tabu_tenure);
     TabuSearchKernelArgs args_device(data_device, model_host.nrows, model_host.ncols, tabu_tenure);
