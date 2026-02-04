@@ -1502,7 +1502,12 @@ void EvolutionSearch::run() const {
                        cudaMemcpyDeviceToHost);
 
             consoleLog("[{}-sol] (objective change, sum_viol change): {} {}", solution_index, score.objective_change, score.violation_change);
-            consoleLog("[{}-sol] (objective, sum_viol): TODO TODO", new_objective, new_violation);
+            consoleLog("[{}-sol] (objective, sum_viol): {}  {}", solution_index, new_objective, new_violation);
+
+            assert(is_eq(thrust::inner_product( data_device.sol.begin() + solution_index * model_host.ncols,
+                    data_device.sol.begin() + (solution_index + 1) * model_host.ncols,
+                    model_device.objective.begin(),0.0), new_objective));
+            //TODO: add here asserts that the violations (sum_slacks) are equal to the updated
 #endif
         }
     }
