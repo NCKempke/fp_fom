@@ -1061,6 +1061,15 @@ __global__ void apply_move(const GpuModelPtrs &model, const TabuSearchKernelArgs
 }
 
 
+__global__ void update_objective_sum_viol(const TabuSearchKernelArgs &args, const double objective_change, const double violation_change, const int solution_index)
+{
+    if (const int thread_idx = threadIdx.x; thread_idx == 0) {
+        args.objective[solution_index] += objective_change;
+        args.sum_viol[solution_index] += violation_change;
+    }
+}
+
+
 __global__ void csr_spmv_kernel(
     int nrows,
     int ncols,
@@ -1222,7 +1231,7 @@ void EvolutionSearch::run() const {
     thrust::device_vector<single_col_move> best_single_col_moves;
 
     moves_probability probabilities{};
-    /* Initialize probabilities for mulit-armed bandit evenly. Random moves are disabled. */
+    /* Initialize probabilities for multi-armed bandit evenly. Random moves are disabled. */
     const double w = 1.0 / static_cast<double>(AVAILABLE_MOVES - 1);
     for (int i = 0; i < AVAILABLE_MOVES; ++i)
         probabilities[i] = w;
@@ -1260,7 +1269,7 @@ void EvolutionSearch::run() const {
     thrust::copy(
         model_host.ub.begin(),
         model_host.ub.end(),
-        data_device.sol.begin() + model_host.ncols
+        data_device.sol.begin() + model_host.ncols * 2
     );
 
     TabuSearchKernelArgs args_device(data_device, model_host.nrows, model_host.ncols, tabu_tenure);
@@ -1275,7 +1284,7 @@ void EvolutionSearch::run() const {
                 thrust::raw_pointer_cast(data_device.slacks.data()));
 
     //TODO move this too to device
-    std::vector<double> sum_slack (3,0);
+    std::vector<double> host_sum_viol (3,0);
     for (int i =0; i < n_solutions; ++i) {
         for (int irow = 0; irow < model_host.nrows; ++irow)
         {
@@ -1286,15 +1295,15 @@ void EvolutionSearch::run() const {
 
             if (model_host.sense[irow] == 'L' && is_lt_feas(slack_row, 0))
             {
-                sum_slack[scaled_row] += fabs(slack_row);
+                host_sum_viol[scaled_row] += fabs(slack_row);
             }
             if (model_host.sense[irow] == 'E' && !is_eq_feas(slack_row, 0))
             {
-                sum_slack[scaled_row] += fabs(slack_row);
+                host_sum_viol[scaled_row] += fabs(slack_row);
             }
         }
     }
-    thrust::copy(sum_slack.begin(), sum_slack.end(), data_device.sum_viol.begin());
+    thrust::copy(host_sum_viol.begin(), host_sum_viol.end(), data_device.sum_viol.begin());
 
     // // TODO : move to device.
     // {
@@ -1366,12 +1375,12 @@ void EvolutionSearch::run() const {
 
     consoleLogNoLineBreak("Initial slack [\t");
     for (int i= 0; i < n_solutions; ++i) {
-        consoleLogNoLineBreak("{},", args_device.sum_viol[i]);
+        consoleLogNoLineBreak("{},", host_sum_viol[i]);
     };
     consoleLog("]");
     consoleLogNoLineBreak("Initial objective [\t");
     for (int i= 0; i < n_solutions; ++i) {
-        consoleLogNoLineBreak("{},", args_device.objective[i]);
+        consoleLogNoLineBreak("{},", obj[i]);
     };
     consoleLog("]");
 
@@ -1510,10 +1519,10 @@ void EvolutionSearch::run() const {
             /* Apply best move. */
             apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index, solution_index);
 
-            args_device.objective[solution_index] += score.objective_change;
-            args_device.sum_viol[solution_index] += score.violation_change;
+            update_objective_sum_viol<<<1, 1014>>>(args_device, score.objective_change, score.violation_change, solution_index);
 
-            consoleLog("[{}-sol] (objective, sum_viol): {} {}", solution_index, args_device.objective[solution_index], args_device.sum_viol[solution_index]);
+            // TODO: print the stats from the gpu
+            // consoleLog("[{}-sol] (objective, sum_viol): {} {}", solution_index, args_device.objective[solution_index], args_device.sum_viol[solution_index]);
         }
     }
 };
