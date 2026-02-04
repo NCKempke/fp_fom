@@ -1277,18 +1277,20 @@ void EvolutionSearch::run() const {
     //TODO move this too to device
     std::vector<double> sum_slack (3,0);
     for (int i =0; i < n_solutions; ++i) {
-        for (int irow = i* n_solutions; irow < model_host.nrows + (i+1) * n_solutions; ++irow)
+        for (int irow = 0; irow < model_host.nrows; ++irow)
         {
-            const double slack_row = data_device.slacks[irow];
             FP_ASSERT(model_host.sense[irow] == 'L' || model_host.sense[irow] == 'E');
+
+            const int scaled_row = irow + n_solutions * model_host.nrows;
+            const double slack_row = data_device.slacks[irow];
 
             if (model_host.sense[irow] == 'L' && is_lt_feas(slack_row, 0))
             {
-                sum_slack[i] += fabs(slack_row);
+                sum_slack[scaled_row] += fabs(slack_row);
             }
             if (model_host.sense[irow] == 'E' && !is_eq_feas(slack_row, 0))
             {
-                sum_slack[i] += fabs(slack_row);
+                sum_slack[scaled_row] += fabs(slack_row);
             }
         }
     }
