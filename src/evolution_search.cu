@@ -181,12 +181,11 @@ int blocks_for_samples(int n_samples_for_type) {
  * - Lagrange         : from Feaspump
  *
  * - TSP swap?
- * - Avoid duplicate moves.
+ * - Avoid duplicate moves!
  *
  * - Solution pool;
  * - Sync solutions from FPR;
  * - Scoring function;
- * - Apply "all" for "small" problems instead of random
  */
 
 struct single_col_move
@@ -208,10 +207,19 @@ struct move_score
     double violation_change = DBL_MAX;
     double weighted_violation_change = DBL_MAX;
 
-    __host__ __device__ inline double feas_score() const
+    /* Return this <= other w.r.t. the feasibility score. */
+    __host__ __device__ inline bool is_lt_feas_score(const move_score& other) const
     {
-        // TODO
-        return /* objective +*/ weighted_violation_change;
+        /* Primary criterion: feasibility score. */
+        if (weighted_violation_change < other.weighted_violation_change)
+            return true;
+
+        /* Primary criterion: feasibility score. */
+        if (weighted_violation_change > other.weighted_violation_change)
+            return false;
+
+        /* Tiebreaker: objective change */
+        return objective_change < other.objective_change;
     }
 };
 
@@ -234,12 +242,6 @@ __device__ inline bool is_tabu(const int *tabu_col, int col, int iter, int tabu_
     return tabu_col[col] > iter - tabu_tenure;
 }
 
-__device__ inline bool aspiration(const move_score &candidate,
-                                  const move_score &global_best)
-{
-    return candidate.feas_score() < global_best.feas_score();
-}
-
 __device__ void reduce_and_offload_best_score_in_block(move_score* best_score, single_col_move* best_move, move_config& config) {
 
     /* Reduce best_move and best_score among the whole block. */
@@ -253,7 +255,7 @@ __device__ void reduce_and_offload_best_score_in_block(move_score* best_score, s
 
         for (int warp = 1; warp < N_WARPS_PER_BLOCK; ++warp)
         {
-            if (best_score[warp].feas_score() < block_best_score.feas_score())
+            if (best_score[warp].is_lt_feas_score(block_best_score))
             {
                 block_best_score = best_score[warp];
                 block_best_move  = best_move[warp];
@@ -515,7 +517,7 @@ __device__ void compute_random_move(const GpuModelPtrs &model, curandState &rand
     if (thread_idx_warp == 0)
     {
         // printf("Compute score %g %g %g", score.objective_change, score.violation_change, score.weighted_violation_change);
-        if (score.feas_score() < best_score.feas_score())
+        if (score.is_lt_feas_score(best_score))
         {
             best_score = score;
             best_move = {fix_val, col};
@@ -593,7 +595,7 @@ __device__ void compute_oneopt_move(const GpuModelPtrs &model, const TabuSearchK
     /* Write violation to smem. */
     if (thread_idx_warp == 0)
     {
-        if (score.feas_score() < best_score.feas_score())
+        if (score.is_lt_feas_score(best_score))
         {
             best_score = score;
             best_move = {fix_val, col};
@@ -620,7 +622,7 @@ __device__ void compute_flip_move(const GpuModelPtrs &model, const TabuSearchKer
     /* Write violation to smem. */
     if (thread_idx_warp == 0)
     {
-        if (score.feas_score() < best_score.feas_score())
+        if (score.is_lt_feas_score(best_score))
         {
             best_score = score;
             best_move = {fix_val, col};
@@ -691,7 +693,7 @@ __device__ void compute_mtm_move(const GpuModelPtrs &model, const TabuSearchKern
         /* Write violation to smem. */
         if (thread_idx_warp == 0)
         {
-            if (score.feas_score() < best_score.feas_score())
+            if (score.is_lt_feas_score(best_score))
             {
                 best_score = score;
                 best_move = {fix_val, col};
@@ -1316,13 +1318,13 @@ void EvolutionSearch::run()
                                             best_scores_single_col.begin() + n_blocks_total,
                                             [] __device__(const move_score &a, const move_score &b)
                                             {
-                                                return a.feas_score() < b.feas_score();
+                                                return a.is_lt_feas_score(b);
                                             });
 
         int min_index = max_iter - best_scores_single_col.begin();
         move_score score = (*max_iter); // Hidden copy GPU -> CPU
 
-        if (score.feas_score() >= 0.0) {
+        if (score.weighted_violation_change >= 0.0) {
             consoleLog("No more good moves; updating weights!");
             const int n_blocks = (model_host.nrows + BLOCKSIZE_VECTOR_KERNEL - 1) / BLOCKSIZE_VECTOR_KERNEL;
 
@@ -1335,7 +1337,7 @@ void EvolutionSearch::run()
             continue;
         }
 
-        double min_value = score.feas_score();
+        double min_value = score.weighted_violation_change;
         assert(min_value != DBL_MAX && min_value < 0.0);
 
         int offset_random = 0;
@@ -1362,7 +1364,7 @@ void EvolutionSearch::run()
             move_name = "unknown";
 
         consoleLog("Taking {} move", move_name);
-        consoleLog("(idx, move_score: (obj_change, slack_change, score)): {} ({}, {}, {})", min_index, score.objective_change, score.violation_change, score.feas_score());
+        consoleLog("(idx, move_score: (obj_change, slack_change, score)): {} ({}, {}, {})", min_index, score.objective_change, score.violation_change, score.weighted_violation_change);
 
         /* Apply best move. */
         apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index);
