@@ -21,6 +21,13 @@ void consoleLog(Args &&...args)
 }
 
 template <typename... Args>
+void consoleLogNoLineBreak(Args &&...args)
+{
+	fmt::print(std::forward<Args>(args)...);
+}
+
+
+template <typename... Args>
 void consoleInfo(Args &&...args)
 {
 	if (isatty(STDOUT_FILENO))

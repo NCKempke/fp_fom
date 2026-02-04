@@ -1276,7 +1276,7 @@ void EvolutionSearch::run()
             model_device.objective.begin(),
             0.0);
     }
-    thrust::copy(obj.begin(), obj.end(), data_device.objective.begin());
+    thrust::copy(obj.begin(), obj.end(), data_device.obje.begin());
 
     consoleInfo("Starting evolution search on GPU");
 
@@ -1302,8 +1302,16 @@ void EvolutionSearch::run()
 
     // TODO: sort ints and bins/extract them. Many moves only make sense for ints and bins!
 
-    consoleLog("Initial slack     {}", args_device.sum_slack);
-    consoleLog("Initial objective {}", args_device.objective);
+    consoleLogNoLineBreak("Initial slack [\t");
+    for (int i= 0; i < n_solutions; ++i) {
+        consoleLogNoLineBreak("{},", args_device.sum_slack[i]);
+    };
+    consoleLog("]");
+    consoleLogNoLineBreak("Initial objective [\t");
+    for (int i= 0; i < n_solutions; ++i) {
+        consoleLogNoLineBreak("{},", args_device.objective[i]);
+    };
+    consoleLog("]");
 
     for (int i_round = 0; i_round < n_rounds; ++i_round)
     {
