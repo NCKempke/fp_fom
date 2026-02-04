@@ -1252,14 +1252,12 @@ void EvolutionSearch::run()
     TabuSearchKernelArgs args_device(data_device, model_host.nrows, model_host.ncols, tabu_tenure);
 
     // calculate slack and sum_viol
-    //thrust::copy(model_device.rhs.begin(), model_device.rhs.end(), data_device.slacks.begin());
-    //csr_spmv_kernel<<<512, 1024>>>(model_device.nrows, gpu_model_ptrs, thrust::raw_pointer_cast(data_device.sol.data()), -1.0,
     assert(data_device.slacks.size() == n_solutions * model_host.nrows);
     // calculate slack and sum_slack
     for (int i =0; i < n_solutions; ++i) {
         thrust::copy(model_device.rhs.begin(), model_device.rhs.end(), data_device.slacks.begin() + i * model_host.nrows);
     }
-    csr_spmv_kernel<<<N_BLOCKS_SINGLE_COL_MOVE, BLOCKSIZE_SINGLE_COL_MOVE>>>(model_device.nrows, model_device.ncols, n_solutions, gpu_model_ptrs, thrust::raw_pointer_cast(data_device.sol.data()), -1.0,
+    csr_spmv_kernel<<<512, 1024>>>(model_device.nrows, model_device.ncols, n_solutions, gpu_model_ptrs, thrust::raw_pointer_cast(data_device.sol.data()), -1.0,
                 thrust::raw_pointer_cast(data_device.slacks.data()));
 
     //TODO move this too to device
@@ -1352,7 +1350,7 @@ void EvolutionSearch::run()
 
     consoleLogNoLineBreak("Initial slack [\t");
     for (int i= 0; i < n_solutions; ++i) {
-        consoleLogNoLineBreak("{},", args_device.sum_slack[i]);
+        consoleLogNoLineBreak("{},", args_device.sum_viol[i]);
     };
     consoleLog("]");
     consoleLogNoLineBreak("Initial objective [\t");
