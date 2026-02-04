@@ -544,9 +544,6 @@ __device__ void compute_oneopt_move(const GpuModelPtrs &model, const TabuSearchK
 
     assert(lb <= col_val && col_val <= ub);
 
-    /* Positive stepsize in objective direction. */
-    double stepsize = DBL_MAX;
-
     /* Get minimum slack in locking direction. Iterate column i and for each row j that locks in objective direction and compute min_j(row_coeff_ij * slack_j). */
     const int col_beg = model.row_ptr_trans[col];
     const int col_end = model.row_ptr_trans[col + 1];
@@ -554,11 +551,10 @@ __device__ void compute_oneopt_move(const GpuModelPtrs &model, const TabuSearchK
     if (lb == -INFTY || ub == INFTY)
         return;
 
-    if (GREEDY)
-    {
-        stepsize = obj > 0.0 ? col_val - lb : ub - col_val;
-    }
-    else
+    /* Initialize stepsize with its greedy value. */
+    double stepsize = obj > 0.0 ? col_val - lb : ub - col_val;
+
+    if (!GREEDY)
     {
         for (int inz = col_beg + thread_idx_warp; inz < col_end; inz += WARP_SIZE)
         {
