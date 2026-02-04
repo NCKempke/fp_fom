@@ -9,6 +9,7 @@
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include <cmath>
+#include <random>
 
 #include <thrust/copy.h>
 #include <thrust/device_vector.h>
@@ -35,12 +36,11 @@ constexpr int BLOCKSIZE_MOVE = 256;
 constexpr int N_WARPS_PER_BLOCK = BLOCKSIZE_MOVE / WARP_SIZE;
 static_assert(BLOCKSIZE_MOVE % WARP_SIZE == 0);
 
-constexpr int N_MOVES_PER_WARP = 16;
+constexpr int N_MOVES_PER_WARP = 32;
 constexpr int N_MOVES_PER_SINGLE_COL_BLOCK = N_MOVES_PER_WARP * N_WARPS_PER_BLOCK;
 
 constexpr int BLOCKSIZE_VECTOR_KERNEL = 1024; /* Blocksize used for vector kernels (each thread operating on one vector element). */
 
-constexpr int N_BLOCKS_SINGLE_COL_MOVE = 512;
 constexpr int AVAILABLE_MOVES = 6;
 
 /* For multi-armed bandit maybe. */
@@ -77,13 +77,12 @@ const char* to_string(move_type m) {
 struct warp_sampling_range {
     int beg;
     int end;
-    int n_samples;
 };
 
 /* For a given interval of sampling candidates [1,..,n_candidates) (e.g. rows or columns) and n_samples total to be computed samples,
  * determine for each warp in this block its assigned sampling range and its assigned number of samples. Returns {beg, end, n_samples}. */
 __device__ inline warp_sampling_range get_warp_sampling_range(int n_candidates, int n_samples) {
-    warp_sampling_range range{0, 0, 0};
+    warp_sampling_range range{0, 0};
 
     const int block_idx = blockIdx.x;
     const int thread_idx = threadIdx.x;
@@ -91,19 +90,12 @@ __device__ inline warp_sampling_range get_warp_sampling_range(int n_candidates, 
     const int warp_id_block = thread_idx / WARP_SIZE;
     const int warp_id_global = block_idx * N_WARPS_PER_BLOCK + warp_id_block;
 
-    /* Only the first n_active_warps actually compute samples. */
+    /* Only the first n_active_warps actually compute samples. We compute at least n_samples moves but one warp always computes its full N_MOVES_PER_WARP. */
     const int n_active_warps = (n_samples + N_MOVES_PER_WARP - 1) / N_MOVES_PER_WARP;
 
     if (warp_id_global >= n_active_warps) {
         return range;
     }
-
-    if (warp_id_global == n_active_warps - 1) {
-        range.n_samples = n_samples - (n_active_warps - 1) * N_MOVES_PER_WARP;
-    } else {
-        range.n_samples = N_MOVES_PER_WARP;
-    }
-    assert(range.n_samples >= 0);
 
     /* Partition [1,..,n_candidates) among all active warps. */
     const int base = n_candidates / n_active_warps;
@@ -114,16 +106,57 @@ __device__ inline warp_sampling_range get_warp_sampling_range(int n_candidates, 
         range.end = range.beg + (base + 1);
     } else {
         range.beg = remaining * (base + 1) + (warp_id_global - remaining) * base;
-        range.end   = range.beg + base;
+        range.end = range.beg + base;
     }
 
     range.beg = min(range.beg, n_candidates);
     range.end = min(range.end, n_candidates);
 
     assert(range.beg <= range.end);
-    assert_if_then(range.n_samples == 0, range.beg == range.end);
-
     return range;
+}
+
+/* For a given range [beg,..,end) return N_MOVES_PER_WARP draws (unique) starting at draws[warp_id * WARP_SIZE]*/
+__device__ void warp_sample_range(int* draws, int beg, int end, size_t seed)
+{
+    const int thread_idx = threadIdx.x;
+    const int warp_id = thread_idx / WARP_SIZE;
+    const int thread_idx_warp = thread_idx % WARP_SIZE;
+
+    int* draws_warp = &draws[warp_id * N_MOVES_PER_WARP]; /* pointer to this warp's draws */
+    const int range = end - beg;
+
+    if (range <= N_MOVES_PER_WARP) {
+        /* Case 1: small range, just return all entries from the range */
+        for (int i = thread_idx_warp; i < N_MOVES_PER_WARP; i += WARP_SIZE) {
+            draws_warp[i] = i < range ? beg + i : -1;
+        }
+    }
+    else {
+        curandState state_thread;
+        int global_thread_id = blockIdx.x * blockDim.x + thread_idx;
+        curand_init(seed, global_thread_id, 0, &state_thread);
+
+        int chunk_size = range / N_MOVES_PER_WARP;
+        int leftover = range % N_MOVES_PER_WARP;
+
+        /* Case 2: larger range, draw N_MOVES_PER_WARP samples in parallel and uniquely.
+         * For this, we split the range into N_MOVES_PER_WARP non-overlapping intervals and each thread picks one column from its sub-range. This enforces some additional uniformness for the draw but well. */
+        for (int i = thread_idx_warp; i < N_MOVES_PER_WARP; i += WARP_SIZE) {
+            /* Compute this thread's sub-range [thread_beg, thread_end) for this sample. */
+            int thread_chunk_size = chunk_size + (i < leftover ? 1 : 0);
+
+            // Compute start of this thread's chunk
+            int thread_beg = i * chunk_size + min(i, leftover);
+            int thread_end = thread_beg + thread_chunk_size;
+            assert(thread_beg < thread_end);
+
+            draws_warp[i] = beg + thread_beg + get_random_int_thread(state_thread, thread_end - thread_beg);
+            assert(beg <= draws_warp[i] && draws_warp[i] < end);
+        }
+    }
+
+    __syncwarp(); /* Ensure warp is done and synchronize its changes. */
 }
 
 int blocks_for_samples(int n_samples_for_type) {
@@ -264,13 +297,13 @@ struct TabuSearchKernelArgs
 
     double *constraint_weights;
     double *objective_weight;
-    bool is_found_feasible;
+    bool is_found_feasible = false;
     double best_objective;
 
     /* Contains a partition of violated constraints first, satisfied constraints later. */
     const int *violated_constraints;
 
-    double sum_slack{};
+    double sum_viol{};
     double objective{};
 
     int n_violated{};
@@ -299,7 +332,7 @@ __device__ move_score compute_score_single_col_move_warp(const GpuModelPtrs &mod
     const double col_val = args.sol[col];
     const double delta = move.val - col_val;
     const double delta_obj = delta * obj_coef;
-    double slack_change_thread = 0.0;
+    double viol_change_thread = 0.0;
     double weighted_viol_change_thread = 0.0;
 
     assert(model.lb[col] <= move.val && move.val <= model.ub[col]);
@@ -318,33 +351,35 @@ __device__ move_score compute_score_single_col_move_warp(const GpuModelPtrs &mod
         const double weight = args.constraint_weights[row_idx];
 
         /* We have <= and = only. */
-        const int is_eq = (model.row_sense[row_idx] == 'E');
+        const double is_eq = (model.row_sense[row_idx] == 'E');
 
         const double slack_old = args.slacks[row_idx];
         const double slack_new = slack_old - coef * delta;
 
-        double viol_old = is_eq * abs(slack_old) + (1 - is_eq) * max(0.0, -slack_old);
-        double viol_new = is_eq * abs(slack_new) + (1 - is_eq) * max(0.0, -slack_new);
+        double viol_old = is_eq * fabs(slack_old) + (1 - is_eq) * fmax(0.0, -slack_old);
+        double viol_new = is_eq * fabs(slack_new) + (1 - is_eq) * fmax(0.0, -slack_new);
 
-        slack_change_thread += (viol_new - viol_old);
-        weighted_viol_change_thread += weight * (viol_new - viol_old);
-    }
+        viol_change_thread += (viol_new - viol_old);
 
-    double slack_change = warp_sum_reduce(slack_change_thread);
-    double weighted_viol_change = warp_sum_reduce(weighted_viol_change_thread);
+        bool feas_before = is_zero_feas(viol_old);
+        bool feas_after = is_zero_feas(viol_new);
 
-    /* Objective score. */
-    double obj_viol_change = 0.0;
-
-    if (args.is_found_feasible) {
-        if (delta_obj < 0) {
-            obj_viol_change = args.objective_weight[0];
-        } else {
-            obj_viol_change = -args.objective_weight[0];
+        /* If the constraint became feasible, we subtract 1 * weight or 2 * weight, if it became infeasible, we add 1 * weight or 2 * weight.
+         * If it became more feasible, we add 1/2 * weight or 1 * weight. */
+        if (feas_before && !feas_after) {
+            /* Bad move. Increases score. */
+            weighted_viol_change_thread += (1.0 + is_eq) * weight;
+        } else if (!feas_before && feas_after) {
+            weighted_viol_change_thread -= (1.0 + is_eq) * weight;
+        } else if (!feas_before && !feas_after && viol_new < viol_old) {
+            weighted_viol_change_thread -= (0.5 + 0.5 * is_eq) * weight;
         }
     }
 
-    return {delta_obj, slack_change, weighted_viol_change + obj_viol_change};
+    double slack_change = warp_sum_reduce(viol_change_thread);
+    double weighted_viol_change = warp_sum_reduce(weighted_viol_change_thread);
+
+    return {delta_obj, slack_change, weighted_viol_change};
 }
 
 /* Returns for threadIdx.x == 0 the score after virtually applying give move. */
@@ -437,6 +472,9 @@ __device__ void compute_random_move(const GpuModelPtrs &model, curandState &rand
 
     double lb = model.lb[col];
     double ub = model.ub[col];
+
+    if (lb < 1000 || 1000 < ub)
+        return;
 
     /* Don't run if these are too close. */
     if (ub - lb < 0.001)
@@ -595,13 +633,12 @@ __device__ void compute_flip_move(const GpuModelPtrs &model, const TabuSearchKer
     }
 }
 
-/* Compute the mtm move for an unsatisfied constraint. */
-__device__ void compute_mtm_move(const GpuModelPtrs &model, const TabuSearchKernelArgs& args, const int row, const int col_index, move_score &best_score, single_col_move &best_move)
+/* Compute all possible mtm moves for a given constraint. */
+__device__ void compute_mtm_move(const GpuModelPtrs &model, const TabuSearchKernelArgs& args, const int row, move_score &best_score, single_col_move &best_move)
 {
     int thread_idx_warp = threadIdx.x % WARP_SIZE;
 
     assert(row < args.nrows);
-    assert(col_index < (model.row_ptr[row + 1] - model.row_ptr[row]));
 
     const double slack_for_row = args.slacks[row];
     const bool slack_is_pos = is_gt_feas(slack_for_row, 0);
@@ -609,57 +646,64 @@ __device__ void compute_mtm_move(const GpuModelPtrs &model, const TabuSearchKern
     if (is_zero(slack_for_row))
         return;
 
-    const int col = model.col_idx[model.row_ptr[row] + col_index];
-    double coeff = model.row_val[model.row_ptr[row] + col_index];
+    for (int inz = model.row_ptr[row]; inz < model.row_ptr[row + 1]; ++inz) {
+        const int col = model.col_idx[inz];
 
-    const double lb = model.lb[col];
-    const double ub = model.ub[col];
-    const double old_val = args.sol[col];
+        if (is_tabu(args.tabu, col, args.iter, args.tabu_tenure))
+            continue;
 
-    move_score score;
-    double fix_val;
-    bool move_up;
+        const double coeff = model.row_val[inz];
+        const double lb = model.lb[col];
+        const double ub = model.ub[col];
+        const double old_val = args.sol[col];
 
-    /* Try to move col as far as possible to make the constraint exactly tight/feasible; as we know the row is infeasible, move the slack rhs - a'x towards zero. */
-    if (slack_is_pos)
-    {
-        move_up = coeff > 0.0 ? true : false;
-    }
-    else
-    {
-        move_up = coeff > 0.0 ? false : true;
-    }
+        move_score score;
+        double fix_val;
+        bool move_up;
 
-    /* Skip if colum is at already at the bound we want to move it towards. */
-    if ((move_up && is_eq(ub, old_val)) || (!move_up && is_eq(lb, old_val)))
-        return;
-
-    assert(coeff != 0.0);
-
-    /* Exact value that makes slack zero; we need
-     *      rhs - a'x - aj dxj == 0
-     * <=>  rhs - a'x           = aj dxj
-     * <=> (rhs - a'x) / aj     = dxj
-     */
-    fix_val = old_val + slack_for_row / coeff;
-    assert_if_then_else(move_up, fix_val > old_val, fix_val < old_val);
-
-    if (model.var_type[col] != 'C')
-        fix_val = move_up ? ceil(fix_val) : floor(fix_val);
-    fix_val = fmin(fmax(fix_val, lb), ub);
-
-    /* score is valid only for threadIdx.x == 0 */
-    score = compute_score_single_col_move_warp(model, args, {fix_val, col});
-
-    /* Write violation to smem. */
-    if (thread_idx_warp == 0)
-    {
-        if (score.feas_score() < best_score.feas_score())
+        /* Try to move col as far as possible to make the constraint exactly tight/feasible; as we know the row is infeasible, move the slack rhs - a'x towards zero. */
+        if (slack_is_pos)
         {
-            best_score = score;
-            best_move = {fix_val, col};
+            move_up = coeff > 0.0 ? true : false;
         }
-        /* best_score and best_move live in smem; however, only thread_idx == 0 touches them (for now) so we don't __syncthreads here. */
+        else
+        {
+            move_up = coeff > 0.0 ? false : true;
+        }
+
+        /* Skip if colum is at already at the bound we want to move it towards. */
+        if ((move_up && is_eq(ub, old_val)) || (!move_up && is_eq(lb, old_val)))
+            return;
+
+        assert(coeff != 0.0);
+
+        /* Exact value that makes slack zero; we need
+         *      rhs - a'x - aj dxj == 0
+         * <=>  rhs - a'x           = aj dxj
+         * <=> (rhs - a'x) / aj     = dxj
+         */
+        fix_val = old_val + slack_for_row / coeff;
+        assert_if_then_else(move_up, fix_val > old_val, fix_val < old_val);
+
+        if (model.var_type[col] != 'C')
+            fix_val = move_up ? ceil(fix_val) : floor(fix_val);
+        fix_val = fmin(fmax(fix_val, lb), ub);
+
+        /* score is valid only for threadIdx.x == 0 */
+        score = compute_score_single_col_move_warp(model, args, {fix_val, col});
+
+        /* Write violation to smem. */
+        if (thread_idx_warp == 0)
+        {
+            if (score.feas_score() < best_score.feas_score())
+            {
+                best_score = score;
+                best_move = {fix_val, col};
+            }
+            /* best_score and best_move live in smem; however, only thread_idx == 0 touches them (for now) so we don't __syncthreads here. */
+        }
+        /* Sync the warp however, before continuing with the next column from this row. */
+        __syncwarp();
     }
 }
 
@@ -673,29 +717,37 @@ __global__ void compute_random_moves_kernel(const GpuModelPtrs model, TabuSearch
     __shared__ curandState random_state[N_WARPS_PER_BLOCK];
     __shared__ single_col_move best_move[N_WARPS_PER_BLOCK];
     __shared__ move_score best_score[N_WARPS_PER_BLOCK];
+    /* Array for drawing the sample columns of this block. */
+    __shared__ int draws[N_MOVES_PER_WARP * N_WARPS_PER_BLOCK];
 
-    /* Initialize shared memory on thread 0. */
-    if (thread_idx_warp == 0)
-    {
-        /* Set random seed to 0 on thread 0 */
-        if (thread_idx_warp == 0)
-            init_curand_warp<N_WARPS_PER_BLOCK>(random_state[warp_id], config.random_seed);
+    /* Set random seed and best move per warp. */
+    if (thread_idx_warp == 0) {
+        init_curand_warp<N_WARPS_PER_BLOCK>(random_state[warp_id], config.random_seed);
 
         best_move[warp_id] = {0.0, -1};
         best_score[warp_id] = {DBL_MAX, DBL_MAX, DBL_MAX};
     }
+
     __syncthreads();
 
-    auto [beg, end, n_samples] = get_warp_sampling_range(args.ncols, config.n_samples);
+    auto [beg, end] = get_warp_sampling_range(args.ncols, config.n_samples);
     const int cols_range = end - beg;
 
     /* Need at least one column! */
     if (cols_range > 0)
     {
-        for (int move = 0; move < n_samples; ++move)
+        /* Draw this warp's column sample. */
+        warp_sample_range(draws, beg, end, config.random_seed);
+        int* draws_warp = draws + warp_id * N_MOVES_PER_WARP;
+
+        for (int move = 0; move < N_MOVES_PER_WARP; ++move)
         {
-            /* Pick a column in our interval. This is uniformly distributed over [beg,..,end). */
-            const int col = beg + get_random_int_warp(random_state[warp_id], cols_range);
+            const int col = draws_warp[move];
+
+            if (col == -1)
+                continue;
+
+            assert(beg <= col && col < end);
 
             if (is_tabu(args.tabu, col, args.iter, args.tabu_tenure))
                 continue;
@@ -717,32 +769,38 @@ __global__ void compute_oneopt_moves_kernel(const GpuModelPtrs model, TabuSearch
     const int warp_id = thread_idx / WARP_SIZE;
     const int thread_idx_warp = thread_idx % WARP_SIZE;
 
-    __shared__ curandState random_state[N_WARPS_PER_BLOCK];
     __shared__ single_col_move best_move[N_WARPS_PER_BLOCK];
     __shared__ move_score best_score[N_WARPS_PER_BLOCK];
+    /* Array for drawing the sample columns of this block. */
+    __shared__ int draws[N_MOVES_PER_WARP * N_WARPS_PER_BLOCK];
 
-    /* Initialize shared memory on thread 0. */
-    if (thread_idx_warp == 0)
-    {
-        /* Set random seed to 0 on thread 0 */
-        if (thread_idx_warp == 0)
-            init_curand_warp<N_WARPS_PER_BLOCK>(random_state[warp_id], config.random_seed);
-
+    /* Set random seed and best move per warp. */
+    if (thread_idx_warp == 0) {
         best_move[warp_id] = {0.0, -1};
         best_score[warp_id] = {DBL_MAX, DBL_MAX, DBL_MAX};
     }
+
     __syncthreads();
 
-    auto [beg, end, n_samples] = get_warp_sampling_range(args.ncols, config.n_samples);
+    auto [beg, end] = get_warp_sampling_range(args.ncols, config.n_samples);
+
     const int cols_range = end - beg;
 
     /* Need at least one column! */
     if (cols_range > 0)
     {
-        for (int move = 0; move < n_samples; ++move)
+        /* Draw this warp's column sample. */
+        warp_sample_range(draws, beg, end, config.random_seed);
+        int* draws_warp = draws + warp_id * N_MOVES_PER_WARP;
+
+        for (int move = 0; move < N_MOVES_PER_WARP; ++move)
         {
-            /* Pick a column in our interval. This is uniformly distributed over [beg,..,end). */
-            const int col = beg + get_random_int_warp(random_state[warp_id], cols_range);
+            const int col = draws_warp[move];
+
+            if (col == -1)
+                continue;
+
+            assert(beg <= col && col < end);
 
             if (is_tabu(args.tabu, col, args.iter, args.tabu_tenure))
                 continue;
@@ -761,32 +819,38 @@ __global__ void compute_flip_moves_kernel(const GpuModelPtrs model, TabuSearchKe
     const int warp_id = thread_idx / WARP_SIZE;
     const int thread_idx_warp = thread_idx % WARP_SIZE;
 
-    __shared__ curandState random_state[N_WARPS_PER_BLOCK];
     __shared__ single_col_move best_move[N_WARPS_PER_BLOCK];
     __shared__ move_score best_score[N_WARPS_PER_BLOCK];
+    /* Array for drawing the sample columns of this block. */
+    __shared__ int draws[N_MOVES_PER_WARP * N_WARPS_PER_BLOCK];
 
-    /* Initialize shared memory on thread 0. */
-    if (thread_idx_warp == 0)
-    {
-        /* Set random seed to 0 on thread 0 */
-        if (thread_idx_warp == 0)
-            init_curand_warp<N_WARPS_PER_BLOCK>(random_state[warp_id], config.random_seed);
-
+    /* Set random seed and best move per warp. */
+    if (thread_idx_warp == 0) {
         best_move[warp_id] = {0.0, -1};
         best_score[warp_id] = {DBL_MAX, DBL_MAX, DBL_MAX};
     }
+
     __syncthreads();
 
-    auto [beg, end, n_samples] = get_warp_sampling_range(args.ncols, config.n_samples);
+    auto [beg, end] = get_warp_sampling_range(args.ncols, config.n_samples);
+
     const int cols_range = end - beg;
 
     /* Need at least one column! */
     if (cols_range > 0)
     {
-        for (int move = 0; move < n_samples; ++move)
+        /* Draw this warp's column sample. */
+        warp_sample_range(draws, beg, end, config.random_seed);
+        int* draws_warp = draws + warp_id * N_MOVES_PER_WARP;
+
+        for (int move = 0; move < N_MOVES_PER_WARP; ++move)
         {
-            /* Pick a column in our interval. TODO: This is not uniformly distributed over [beg,..,end). */
-            const int col = beg + get_random_int_warp(random_state[warp_id], cols_range);
+            const int col = draws_warp[move];
+
+            if (col == -1)
+                continue;
+
+            assert(beg <= col && col < end);
 
             if (is_tabu(args.tabu, col, args.iter, args.tabu_tenure))
                 continue;
@@ -805,40 +869,42 @@ __global__ void compute_mtm_sat_moves_kernel(const GpuModelPtrs model, TabuSearc
     const int warp_id = thread_idx / WARP_SIZE;
     const int thread_idx_warp = thread_idx % WARP_SIZE;
 
-    __shared__ curandState random_state[N_WARPS_PER_BLOCK];
     __shared__ single_col_move best_move[N_WARPS_PER_BLOCK];
     __shared__ move_score best_score[N_WARPS_PER_BLOCK];
+    /* Array for drawing the sample columns of this block. */
+    __shared__ int draws[N_MOVES_PER_WARP * N_WARPS_PER_BLOCK];
 
-    /* Initialize shared memory on thread 0. */
-    if (thread_idx_warp == 0)
-    {
-        /* Set random seed to 0 on thread 0 */
-        if (thread_idx_warp == 0)
-            init_curand_warp<N_WARPS_PER_BLOCK>(random_state[warp_id], config.random_seed);
-
+    /* Set random seed and best move per warp. */
+    if (thread_idx_warp == 0) {
         best_move[warp_id] = {0.0, -1};
         best_score[warp_id] = {DBL_MAX, DBL_MAX, DBL_MAX};
     }
+
     __syncthreads();
 
     const int n_feasible = args.nrows - args.n_violated;
-    auto [beg, end, n_samples] = get_warp_sampling_range(n_feasible, config.n_samples);
+    auto [beg, end] = get_warp_sampling_range(n_feasible, config.n_samples);
+
     const int row_range = end - beg;
 
     /* Need at least one row! */
     if (row_range > 0)
     {
-        for (int move = 0; move < n_samples; ++move)
-        {
-            /* Pick a row in our interval. TODO: This is not uniformly distributed over [beg,...,end). */
-            const int row = args.violated_constraints[args.n_violated + beg + get_random_int_warp(random_state[warp_id], row_range)];
-            const int col_index = get_random_int_warp(random_state[warp_id], model.row_ptr[row + 1] - model.row_ptr[row]);
+        /* Draw this warp's row sample. */
+        warp_sample_range(draws, beg, end, config.random_seed);
+        int* draws_warp = draws + warp_id * N_MOVES_PER_WARP;
 
-            if (is_tabu(args.tabu, model.col_idx[model.row_ptr[row] + col_index], args.iter, args.tabu_tenure))
+        for (int move = 0; move < N_MOVES_PER_WARP; ++move)
+        {
+            const int row = draws_warp[move];
+
+            if (row == -1)
                 continue;
 
-            /* Compute a move for the picked column. */
-            compute_mtm_move(model, args, row, col_index, best_score[warp_id], best_move[warp_id]);
+            assert(beg <= row && row < end);
+
+            /* Compute a move for all columns in the picked row. */
+            compute_mtm_move(model, args, row, best_score[warp_id], best_move[warp_id]);
         }
     }
 
@@ -851,50 +917,52 @@ __global__ void compute_mtm_unsat_moves_kernel(const GpuModelPtrs model, TabuSea
     const int warp_id = thread_idx / WARP_SIZE;
     const int thread_idx_warp = thread_idx % WARP_SIZE;
 
-    __shared__ curandState random_state[N_WARPS_PER_BLOCK];
     __shared__ single_col_move best_move[N_WARPS_PER_BLOCK];
     __shared__ move_score best_score[N_WARPS_PER_BLOCK];
+    /* Array for drawing the sample columns of this block. */
+    __shared__ int draws[N_MOVES_PER_WARP * N_WARPS_PER_BLOCK];
 
-    /* Initialize shared memory on thread 0. */
-    if (thread_idx_warp == 0)
-    {
-        /* Set random seed to 0 on thread 0 */
-        if (thread_idx_warp == 0)
-            init_curand_warp<N_WARPS_PER_BLOCK>(random_state[warp_id], config.random_seed);
-
+    /* Set random seed and best move per warp. */
+    if (thread_idx_warp == 0) {
         best_move[warp_id] = {0.0, -1};
         best_score[warp_id] = {DBL_MAX, DBL_MAX, DBL_MAX};
     }
+
     __syncthreads();
 
-    auto [beg, end, n_samples] = get_warp_sampling_range(args.n_violated, config.n_samples);
+    auto [beg, end] = get_warp_sampling_range(args.n_violated, config.n_samples);
+
     const int row_range = end - beg;
 
     /* Need at least one row! */
     if (row_range > 0)
     {
-        for (int move = 0; move < n_samples; ++move)
-        {
-            /* Pick a row in our interval. This is uniformly distributed over [my_rows_start,...,my_rows_end). */
-            const int row = args.violated_constraints[beg + get_random_int_warp(random_state[warp_id], row_range)];
-            const int col_index = get_random_int_warp(random_state[warp_id], model.row_ptr[row + 1] - model.row_ptr[row]);
+        /* Draw this warp's row sample. */
+        warp_sample_range(draws, beg, end, config.random_seed);
+        int* draws_warp = draws + warp_id * N_MOVES_PER_WARP;
 
-            if (is_tabu(args.tabu, model.col_idx[model.row_ptr[row] + col_index], args.iter, args.tabu_tenure))
+        for (int move = 0; move < N_MOVES_PER_WARP; ++move)
+        {
+            const int row = draws_warp[move];
+
+            if (row == -1)
                 continue;
 
-            /* Compute a move for the picked column. */
-            compute_mtm_move(model, args, row, col_index, best_score[warp_id], best_move[warp_id]);
+            assert(beg <= row && row < end);
+
+            /* Compute a move for all columns in the picked row. */
+            compute_mtm_move(model, args, row, best_score[warp_id], best_move[warp_id]);
         }
     }
 
     reduce_and_offload_best_score_in_block(best_score, best_move, config);
 }
 
+template <const bool SMOOTHING>
 __global__ void update_weights_kernel(
     const GpuModelPtrs model,
-    TabuSearchKernelArgs args,
-    bool weight_smooth_mode,
-    double smooth_prob)
+    TabuSearchKernelArgs args
+)
 {
     const int row_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -906,27 +974,13 @@ __global__ void update_weights_kernel(
     const bool is_eq = (model.row_sense[row_idx] == 'E');
     const bool is_violated = is_eq ? !is_eq_feas(slack, 0) : is_lt_feas(slack, 0);
 
-    if (weight_smooth_mode) {
-        // Probabilistic smoothing
-        __shared__ curandState random_state;
-        if (threadIdx.x == 0) {
-            curand_init(row_idx * args.iter * args.nrows, 0, 0, &random_state);
-        }
-        __syncthreads();
-
-        float rand_val = curand_uniform(&random_state);
-        bool do_smooth = (rand_val * 10000.0f) < smooth_prob;
-
-        if (do_smooth) {
-            // Smooth phase: decrease weights on satisfied constraints
-            if (!is_violated && args.constraint_weights[row_idx] > 0) {
-                args.constraint_weights[row_idx] -= 1.0;
-            }
-        } else {
+    if (SMOOTHING) {
+        // Smooth phase: decrease weights on satisfied constraints
+        if (!is_violated && args.constraint_weights[row_idx] > 0) {
+            args.constraint_weights[row_idx] -= 1.0;
+        } else  if (is_violated) {
             // Penalize phase: increase weights on violated constraints
-            if (is_violated) {
-                args.constraint_weights[row_idx] += 1.0;
-            }
+            args.constraint_weights[row_idx] += 1.0;
         }
     } else {
         // Monotone: always increase weights on violated constraints
@@ -1108,14 +1162,21 @@ void EvolutionSearch::run()
 {
     int seed = 0;
 
+    /* For smoothing decision. */
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    const double smooth_prob = 0.0001;
+
     thrust::device_vector<move_score> best_scores_single_col;
     thrust::device_vector<single_col_move> best_single_col_moves;
 
     moves_probability probabilities{};
-    /* Initialize probabilities for mulit-armed bandit evenly. */
-    const double w = 1.0 / static_cast<double>(AVAILABLE_MOVES);
+    /* Initialize probabilities for mulit-armed bandit evenly. Random moves are disabled. */
+    const double w = 1.0 / static_cast<double>(AVAILABLE_MOVES - 1);
     for (int i = 0; i < AVAILABLE_MOVES; ++i)
         probabilities[i] = w;
+    probabilities[static_cast<int>(move_type::random)] = 0.0;
 
     auto gpu_model_ptrs = model_device.get_ptrs();
     TabuSearchDataDevice data_device(model_host.nrows, model_host.ncols, tabu_tenure);
@@ -1133,7 +1194,7 @@ void EvolutionSearch::run()
         /* Compute slacks_host = slacks_host - Ax = rhs - Ax */
         model_host.rows.SpMV(-1.0, sol_host.data(), slacks_host.data());
 
-        double sum_slack = 0.0;
+        double sum_viol = 0.0;
         for (int irow = 0; irow < model_host.nrows; ++irow)
         {
             const double slack_row = slacks_host[irow];
@@ -1141,17 +1202,17 @@ void EvolutionSearch::run()
 
             if (model_host.sense[irow] == 'L' && is_lt_feas(slack_row, 0))
             {
-                sum_slack += fabs(slack_row);
+                sum_viol += fabs(slack_row);
             }
             if (model_host.sense[irow] == 'E' && !is_eq_feas(slack_row, 0))
             {
-                sum_slack += fabs(slack_row);
+                sum_viol += fabs(slack_row);
             }
         }
 
         thrust::copy(slacks_host.begin(), slacks_host.end(), data_device.slacks.begin());
         thrust::copy(sol_host.begin(), sol_host.end(), data_device.sol.begin());
-        args_device.sum_slack = sum_slack;
+        args_device.sum_viol = sum_viol;
     }
 
     args_device.objective = thrust_dot_product(data_device.sol, model_device.objective);
@@ -1180,7 +1241,7 @@ void EvolutionSearch::run()
 
     // TODO: sort ints and bins/extract them. Many moves only make sense for ints and bins!
 
-    consoleLog("Initial slack     {}", args_device.sum_slack);
+    consoleLog("Initial slack     {}", args_device.sum_viol);
     consoleLog("Initial objective {}", args_device.objective);
 
     for (int i_round = 0; i_round < n_rounds; ++i_round)
@@ -1190,7 +1251,7 @@ void EvolutionSearch::run()
         /* Each kernel and block get assigned as this rounds random seed:
          * i_rounds * (MOVES * BLOCKS) + BLOCKS * i_move + i_block
          */
-        int nmoves_total = 1e4 * AVAILABLE_MOVES;
+        int nmoves_total = 1e5 * AVAILABLE_MOVES;
 
         thrust::sequence(data_device.violated_constraints.begin(), data_device.violated_constraints.end()); /* Set to 0,1,...,nrows-1. */
 
@@ -1218,24 +1279,35 @@ void EvolutionSearch::run()
         move_score* best_scores_single_col_ptr = thrust::raw_pointer_cast(best_scores_single_col.data());
         single_col_move* best_single_col_moves_ptr = thrust::raw_pointer_cast(best_single_col_moves.data());
 
-        /* Compute best move for each block. */
-        compute_random_moves_kernel<<<blocks_per_move[0], BLOCKSIZE_MOVE>>>(
-            gpu_model_ptrs, args_device, config_per_move[0]);
+        if (blocks_per_move[0] > 0) {
+            compute_random_moves_kernel<<<blocks_per_move[0], BLOCKSIZE_MOVE>>>(
+                gpu_model_ptrs, args_device, config_per_move[0]);
+        }
 
-        compute_oneopt_moves_kernel<false><<<blocks_per_move[1], BLOCKSIZE_MOVE>>>(
-            gpu_model_ptrs, args_device, config_per_move[1]);
+        if (blocks_per_move[1] > 0) {
+            compute_oneopt_moves_kernel<false><<<blocks_per_move[1], BLOCKSIZE_MOVE>>>(
+                gpu_model_ptrs, args_device, config_per_move[1]);
+        }
 
-        compute_oneopt_moves_kernel<true><<<blocks_per_move[2], BLOCKSIZE_MOVE>>>(
-            gpu_model_ptrs, args_device, config_per_move[2]);
+        if (blocks_per_move[2] > 0) {
+            compute_oneopt_moves_kernel<true><<<blocks_per_move[2], BLOCKSIZE_MOVE>>>(
+                gpu_model_ptrs, args_device, config_per_move[2]);
+        }
 
-        compute_flip_moves_kernel<<<blocks_per_move[3], BLOCKSIZE_MOVE>>>(
-            gpu_model_ptrs, args_device, config_per_move[3]);
+        if (blocks_per_move[3] > 0) {
+            compute_flip_moves_kernel<<<blocks_per_move[3], BLOCKSIZE_MOVE>>>(
+                gpu_model_ptrs, args_device, config_per_move[3]);
+        }
 
-        compute_mtm_unsat_moves_kernel<<<blocks_per_move[4], BLOCKSIZE_MOVE>>>(
-            gpu_model_ptrs, args_device, config_per_move[4]);
+        if (blocks_per_move[4] > 0) {
+            compute_mtm_unsat_moves_kernel<<<blocks_per_move[4], BLOCKSIZE_MOVE>>>(
+                gpu_model_ptrs, args_device, config_per_move[4]);
+        }
 
-        compute_mtm_sat_moves_kernel<<<blocks_per_move[5], BLOCKSIZE_MOVE>>>(
-            gpu_model_ptrs, args_device, config_per_move[5]);
+        if (blocks_per_move[5] > 0) {
+            compute_mtm_sat_moves_kernel<<<blocks_per_move[5], BLOCKSIZE_MOVE>>>(
+                gpu_model_ptrs, args_device, config_per_move[5]);
+        }
 
         // /* ----- */
         // thrust::host_vector<move_score> host_scores = best_scores_single_col;
@@ -1257,24 +1329,38 @@ void EvolutionSearch::run()
         if (score.feas_score() >= 0.0) {
             consoleLog("No more good moves; updating weights!");
             const int n_blocks = (model_host.nrows + BLOCKSIZE_VECTOR_KERNEL - 1) / BLOCKSIZE_VECTOR_KERNEL;
+
             /* Update the weigths and continue!  */
-            update_weights_kernel<<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(gpu_model_ptrs, args_device, false, 0.0001);
+            if (dist(gen) < smooth_prob)
+                update_weights_kernel<true><<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(gpu_model_ptrs, args_device);
+            else
+                update_weights_kernel<false><<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(gpu_model_ptrs, args_device);
+
             continue;
         }
 
         double min_value = score.feas_score();
         assert(min_value != DBL_MAX && min_value < 0.0);
 
+        int offset_random = 0;
+        int offset_oneopt = offset_random + blocks_per_move[0];
+        int offset_oneopt_greedy = offset_oneopt + blocks_per_move[1];
+        int offset_flip = offset_oneopt_greedy + blocks_per_move[2];
+        int offset_mtm_unsat = offset_flip + blocks_per_move[3];
+        int offset_mtm_sat = offset_mtm_unsat + blocks_per_move[4];
+
         std::string move_name;
-        if (min_index >= 4 * N_BLOCKS_SINGLE_COL_MOVE)
+        if (min_index >= offset_mtm_sat)
             move_name = "mtm_sat";
-        else if (min_index >= 3 * N_BLOCKS_SINGLE_COL_MOVE)
+        else if (min_index >= offset_mtm_unsat)
             move_name = "mtm_unsat";
-        else if (min_index >= 2 * N_BLOCKS_SINGLE_COL_MOVE)
+        else if (min_index >= offset_flip)
             move_name = "flip";
-        else if (min_index >= 1 * N_BLOCKS_SINGLE_COL_MOVE)
+        else if (min_index >= offset_oneopt_greedy)
+            move_name = "oneopt_greedy";
+        else if (min_index >= offset_oneopt)
             move_name = "oneopt";
-        else if (min_index >= 0)
+        else if (min_index >= offset_random)
             move_name = "random";
         else
             move_name = "unknown";
@@ -1286,8 +1372,8 @@ void EvolutionSearch::run()
         apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index);
 
         args_device.objective += score.objective_change;
-        args_device.sum_slack += score.violation_change;
+        args_device.sum_viol += score.violation_change;
 
-        consoleLog("(objective, sum_slack): {} {}", args_device.objective, args_device.sum_slack);
+        consoleLog("(objective, sum_viol): {} {}", args_device.objective, args_device.sum_viol);
     }
 };

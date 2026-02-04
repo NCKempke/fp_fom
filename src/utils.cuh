@@ -162,3 +162,16 @@ __device__ int get_random_int_warp(curandState &state, int n)
 
     return randval;
 }
+
+/** Returns, for the calling thread and its random state, a random integer between [0,..,n) excluding n. */
+__device__ int get_random_int_thread(curandState &state, int n) {
+    int randval;
+
+    if (n > 0) {
+        unsigned int r = curand(&state);
+        randval = r % n;
+    } else {
+        randval = 0;
+    }
+    return randval;
+}
