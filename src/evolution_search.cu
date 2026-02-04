@@ -1285,59 +1285,25 @@ void EvolutionSearch::run() const {
 
     //TODO move this too to device
     std::vector<double> host_sum_viol (3,0);
-    for (int i =0; i < n_solutions; ++i) {
+    for (int solution_index =0; solution_index < n_solutions; ++solution_index) {
         for (int irow = 0; irow < model_host.nrows; ++irow)
         {
             FP_ASSERT(model_host.sense[irow] == 'L' || model_host.sense[irow] == 'E');
 
-            const int scaled_row = irow + n_solutions * model_host.nrows;
-            const double slack_row = data_device.slacks[irow];
+            const int scaled_row = irow + solution_index * model_host.nrows;
+            const double slack_row = data_device.slacks[scaled_row];
 
             if (model_host.sense[irow] == 'L' && is_lt_feas(slack_row, 0))
             {
-                host_sum_viol[scaled_row] += fabs(slack_row);
+                host_sum_viol[solution_index] += fabs(slack_row);
             }
             if (model_host.sense[irow] == 'E' && !is_eq_feas(slack_row, 0))
             {
-                host_sum_viol[scaled_row] += fabs(slack_row);
+                host_sum_viol[solution_index] += fabs(slack_row);
             }
         }
     }
     thrust::copy(host_sum_viol.begin(), host_sum_viol.end(), data_device.sum_viol.begin());
-
-    // // TODO : move to device.
-    // {
-    //     /* Initialize sol and slacks. */
-    //     std::vector<double> sol_host(model_host.ncols, 0.0);
-    //     std::vector<double> slacks_host = model_host.rhs;
-    //
-    //     for (int jcol = 0; jcol < model_host.ncols; ++jcol)
-    //         sol_host[jcol] = max(model_host.lb[jcol], min(sol_host[jcol], model_host.ub[jcol]));
-    //
-    //     /* Compute slacks_host = slacks_host - Ax = rhs - Ax */
-    //     model_host.rows.SpMV(-1.0, sol_host.data(), slacks_host.data());
-    //
-    //     double sum_viol = 0.0;
-    //     for (int irow = 0; irow < model_host.nrows; ++irow)
-    //     {
-    //         const double slack_row = slacks_host[irow];
-    //         FP_ASSERT(model_host.sense[irow] == 'L' || model_host.sense[irow] == 'E');
-    //
-    //         if (model_host.sense[irow] == 'L' && is_lt_feas(slack_row, 0))
-    //         {
-    //             sum_viol += fabs(slack_row);
-    //         }
-    //         if (model_host.sense[irow] == 'E' && !is_eq_feas(slack_row, 0))
-    //         {
-    //             sum_viol += fabs(slack_row);
-    //         }
-    //     }
-    //
-    //     thrust::copy(slacks_host.begin(), slacks_host.end(), data_device.slacks.begin());
-    //     thrust::copy(sol_host.begin(), sol_host.end(), data_device.sol.begin());
-    //     assert(args_device.sum_viol == sum_viol);
-    //     args_device.sum_viol = sum_viol;
-    // }
 
     assert(data_device.sol.size() == n_solutions * model_host.ncols);
     std::vector<double> obj (3,0);
@@ -1521,8 +1487,23 @@ void EvolutionSearch::run() const {
 
             update_objective_sum_viol<<<1, 1014>>>(args_device, score.objective_change, score.violation_change, solution_index);
 
-            // TODO: print the stats from the gpu
-            // consoleLog("[{}-sol] (objective, sum_viol): {} {}", solution_index, args_device.objective[solution_index], args_device.sum_viol[solution_index]);
+
+#define DEBUG
+#ifdef DEBUG
+            double new_objective, new_violation;
+
+            cudaMemcpy(&new_objective,
+                       args_device.objective + solution_index,
+                       sizeof(double),
+                       cudaMemcpyDeviceToHost);
+            cudaMemcpy(&new_violation,
+                       args_device.sum_viol + solution_index,
+                       sizeof(double),
+                       cudaMemcpyDeviceToHost);
+
+            consoleLog("[{}-sol] (objective change, sum_viol change): {} {}", solution_index, score.objective_change, score.violation_change);
+            consoleLog("[{}-sol] (objective, sum_viol): TODO TODO", new_objective, new_violation);
+#endif
         }
     }
 };
