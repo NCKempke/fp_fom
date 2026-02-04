@@ -272,7 +272,7 @@ struct TabuSearchDataDevice
     thrust::device_vector<double> sol;
     thrust::device_vector<double> slacks;
     thrust::device_vector<int> tabu;
-    thrust::device_vector<double> sum_slacks;
+    thrust::device_vector<double> sum_viol;
     thrust::device_vector<double> objective;
     thrust::device_vector<int> n_violated;
 
@@ -282,15 +282,15 @@ struct TabuSearchDataDevice
 
     thrust::device_vector<int> violated_constraints;
 
-    TabuSearchDataDevice(int nrows_, int ncols_, int tabu_tenure, int n_solutions)
+    TabuSearchDataDevice(const int nrows_, const int ncols_, const int tabu_tenure, const int n_solutions)
         : sol(ncols_ * n_solutions, 0.0),
           slacks(nrows_ * n_solutions, 0.0),
           tabu(ncols_ * n_solutions, -tabu_tenure),
-          sum_slacks(n_solutions, 0.0),
+          sum_viol(n_solutions, 0.0),
           objective(n_solutions, 0.0),
           n_violated(n_solutions, 0.0),
           constraint_weights(nrows_ * n_solutions, 1),
-          objective_weight(1, 1),
+          objective_weight(n_solutions, 1),
           violated_constraints(nrows_ * n_solutions) {
     }
 
@@ -317,6 +317,7 @@ struct TabuSearchKernelArgs
 
     int* n_violated;
     int iter{};
+
     int nrows;
     int ncols;
 
@@ -329,7 +330,7 @@ struct TabuSearchKernelArgs
         objective_weight(thrust::raw_pointer_cast(data.objective_weight.data())),
 
         violated_constraints(thrust::raw_pointer_cast(data.violated_constraints.data())),
-        sum_slack(thrust::raw_pointer_cast(data.sum_slacks.data())),
+        sum_viol(thrust::raw_pointer_cast(data.sum_viol.data())),
         objective(thrust::raw_pointer_cast(data.objective.data())),
         n_violated(thrust::raw_pointer_cast(data.n_violated.data())),
         nrows(nrows_), ncols(ncols_), tabu_tenure(tabu_tenure_) {
@@ -337,14 +338,15 @@ struct TabuSearchKernelArgs
 };
 
 /* Returns for threadIdx.x % WARP_SIZE == 0 the score after virtually applying give move. Runs on a per-warp basis and expects equal arguments across the warp. */
-__device__ move_score compute_score_single_col_move_warp(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, single_col_move move)
+__device__ move_score compute_score_single_col_move_warp(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, single_col_move move, int solution_index)
 {
     const int thread_idx_warp = threadIdx.x % WARP_SIZE;
     const int col = move.col;
+    int scaled_col = col + solution_index * args.ncols;
 
     const double obj_coef = model.objective[col];
-    const double col_val = args.sol[col];
-    const double delta = move.val - col_val;
+    const double old_col_val = args.sol[scaled_col];
+    const double delta = move.val - old_col_val;
     const double delta_obj = delta * obj_coef;
     double viol_change_thread = 0.0;
     double weighted_viol_change_thread = 0.0;
@@ -362,12 +364,13 @@ __device__ move_score compute_score_single_col_move_warp(const GpuModelPtrs &mod
     {
         const double coef = model.row_val_trans[inz];
         const int row_idx = model.col_idx_trans[inz];
-        const double weight = args.constraint_weights[row_idx];
+        const int scaled_row_idx = model.col_idx_trans[inz] + row_idx * solution_index;
+        const double weight = args.constraint_weights[scaled_row_idx];
 
         /* We have <= and = only. */
         const double is_eq = (model.row_sense[row_idx] == 'E');
 
-        const double slack_old = args.slacks[row_idx];
+        const double slack_old = args.slacks[scaled_row_idx];
         const double slack_new = slack_old - coef * delta;
 
         double viol_old = is_eq * fabs(slack_old) + (1 - is_eq) * fmax(0.0, -slack_old);
@@ -397,7 +400,7 @@ __device__ move_score compute_score_single_col_move_warp(const GpuModelPtrs &mod
 }
 
 /* Returns for threadIdx.x == 0 the score after virtually applying give move. */
-__device__ move_score compute_score_col_swap(const GpuModelPtrs &model, const double *slack, const double *sol, swap_move move)
+__device__ move_score compute_score_col_swap(const GpuModelPtrs &model, const double *slack, const double *sol, const swap_move move, int solution_index)
 {
     const int thread_idx = threadIdx.x;
     const int col1 = move.col1;
@@ -479,7 +482,7 @@ __device__ move_score compute_score_col_swap(const GpuModelPtrs &model, const do
 }
 
 /* activities = rhs - Ax */
-__device__ void compute_random_move(const GpuModelPtrs &model, curandState &random_state, const TabuSearchKernelArgs &args, int col, move_score &best_score, single_col_move &best_move)
+__device__ void compute_random_move(const GpuModelPtrs &model, curandState &random_state, const TabuSearchKernelArgs &args, const int col, move_score &best_score, single_col_move &best_move, int solution_index)
 {
     const int thread_idx_warp = threadIdx.x % WARP_SIZE;
     assert(col < args.ncols);
@@ -495,7 +498,8 @@ __device__ void compute_random_move(const GpuModelPtrs &model, curandState &rand
         return;
 
     double fix_val;
-    double col_val = args.sol[col];
+    int scaled_col = col + solution_index * args.ncols;
+    double col_val = args.sol[scaled_col];
 
     if (model.var_type[col] == 'B')
     {
@@ -523,7 +527,7 @@ __device__ void compute_random_move(const GpuModelPtrs &model, curandState &rand
     assert(fix_val != col_val || model.var_type[col] == 'C');
 
     /* score is valid only for threadIdx.x == 0 */
-    const auto score = compute_score_single_col_move_warp(model, args, {fix_val, col});
+    const auto score = compute_score_single_col_move_warp(model, args, {fix_val, col}, solution_index);
 
     /* Write violation to smem. */
     if (thread_idx_warp == 0)
@@ -541,16 +545,18 @@ __device__ void compute_random_move(const GpuModelPtrs &model, curandState &rand
 
 /* activities = rhs - Ax */
 template <const bool GREEDY>
-__device__ void compute_oneopt_move(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, int col, move_score &best_score, single_col_move &best_move)
+__device__ void compute_oneopt_move(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, const int col, move_score &best_score, single_col_move &best_move, const int solution_index)
 {
     const int thread_idx_warp = threadIdx.x % WARP_SIZE;
     assert(col < args.ncols);
 
+    const int scaled_col = col + solution_index * args.ncols;
+
     // TODO column must be integer ?
-    double col_val = args.sol[col];
-    double lb = model.lb[col];
-    double ub = model.ub[col];
-    double obj = model.objective[col];
+    const double col_val = args.sol[scaled_col];
+    const double lb = model.lb[col];
+    const double ub = model.ub[col];
+    const double obj = model.objective[col];
 
     /* Only do this for variables with non-zero objective. */
     if ((is_gt(obj, 0.0) && is_eq(col_val, lb)) || (is_lt(obj, 0.0) && is_eq(col_val, ub)) || is_eq(obj, 0.0))
@@ -574,9 +580,10 @@ __device__ void compute_oneopt_move(const GpuModelPtrs &model, const TabuSearchK
         {
             const double coef = model.row_val_trans[inz];
             const int row_idx = model.col_idx_trans[inz];
+            const int scaled_row_idx = row_idx + solution_index * args.nrows;
             const char sense = model.row_sense[row_idx];
-            const char row_slack = args.slacks[row_idx];
-            const int is_eq = (sense == 'E');
+            const double row_slack = args.slacks[scaled_row_idx];
+            const int is_eq = sense == 'E';
             const int is_objcoef_pos = (obj * coef > 0.0);
             const int is_row_slack_neg = is_lt_feas(row_slack, 0.0);
 
@@ -602,7 +609,7 @@ __device__ void compute_oneopt_move(const GpuModelPtrs &model, const TabuSearchK
     assert(is_le(lb, fix_val) && is_le(fix_val, ub));
 
     /* score is valid only for threadIdx.x == 0 */
-    const auto score = compute_score_single_col_move_warp(model, args, {fix_val, col});
+    const auto score = compute_score_single_col_move_warp(model, args, {fix_val, col}, solution_index);
 
     /* Write violation to smem. */
     if (thread_idx_warp == 0)
@@ -617,19 +624,19 @@ __device__ void compute_oneopt_move(const GpuModelPtrs &model, const TabuSearchK
 }
 
 /* TODO: delete flip move? This is completely equal to the binary random move. */
-__device__ void compute_flip_move(const GpuModelPtrs &model, const TabuSearchKernelArgs& args, const int col, move_score &best_score, single_col_move &best_move)
+__device__ void compute_flip_move(const GpuModelPtrs &model, const TabuSearchKernelArgs& args, const int col, move_score &best_score, single_col_move &best_move, const int solution_index)
 {
     const int thread_idx_warp = threadIdx.x % WARP_SIZE;
-    move_score score;
-    double fix_val;
 
     if (col >= args.ncols || model.var_type[col] != 'B')
         return;
 
-    fix_val = args.sol[col] > 0.5 ? 0 : 1;
+    const int scaled_col = col + solution_index * args.ncols;
+
+    double fix_val = args.sol[scaled_col] > 0.5 ? 0 : 1;
 
     /* score is valid only for threadIdx.x == 0 */
-    score = compute_score_single_col_move_warp(model, args, {fix_val, col});
+    move_score score = compute_score_single_col_move_warp(model, args, {fix_val, col}, solution_index);
 
     /* Write violation to smem. */
     if (thread_idx_warp == 0)
@@ -644,13 +651,14 @@ __device__ void compute_flip_move(const GpuModelPtrs &model, const TabuSearchKer
 }
 
 /* Compute all possible mtm moves for a given constraint. */
-__device__ void compute_mtm_move(const GpuModelPtrs &model, const TabuSearchKernelArgs& args, const int row, move_score &best_score, single_col_move &best_move)
+__device__ void compute_mtm_move(const GpuModelPtrs &model, const TabuSearchKernelArgs& args, const int row, move_score &best_score, single_col_move &best_move, const int solution_index)
 {
     int thread_idx_warp = threadIdx.x % WARP_SIZE;
 
     assert(row < args.nrows);
 
-    const double slack_for_row = args.slacks[row];
+    const int scaled_row = row + solution_index * args.nrows;
+    const double slack_for_row = args.slacks[scaled_row];
     const bool slack_is_pos = is_gt_feas(slack_for_row, 0);
 
     if (is_zero(slack_for_row))
@@ -658,27 +666,27 @@ __device__ void compute_mtm_move(const GpuModelPtrs &model, const TabuSearchKern
 
     for (int inz = model.row_ptr[row]; inz < model.row_ptr[row + 1]; ++inz) {
         const int col = model.col_idx[inz];
+        const int scaled_col = col + solution_index * args.ncols;
 
-        if (is_tabu(args.tabu, col, args.iter, args.tabu_tenure))
+        if (is_tabu(args.tabu, col + solution_index * args.ncols, args.iter, args.tabu_tenure))
             continue;
 
         const double coeff = model.row_val[inz];
         const double lb = model.lb[col];
         const double ub = model.ub[col];
-        const double old_val = args.sol[col];
+        const double old_val = args.sol[scaled_col];
 
         move_score score;
-        double fix_val;
         bool move_up;
 
         /* Try to move col as far as possible to make the constraint exactly tight/feasible; as we know the row is infeasible, move the slack rhs - a'x towards zero. */
         if (slack_is_pos)
         {
-            move_up = coeff > 0.0 ? true : false;
+            move_up = coeff > 0.0;
         }
         else
         {
-            move_up = coeff > 0.0 ? false : true;
+            move_up = coeff <= 0.0;
         }
 
         /* Skip if colum is at already at the bound we want to move it towards. */
@@ -692,7 +700,7 @@ __device__ void compute_mtm_move(const GpuModelPtrs &model, const TabuSearchKern
          * <=>  rhs - a'x           = aj dxj
          * <=> (rhs - a'x) / aj     = dxj
          */
-        fix_val = old_val + slack_for_row / coeff;
+        double fix_val = old_val + slack_for_row / coeff;
         assert_if_then_else(move_up, fix_val > old_val, fix_val < old_val);
 
         if (model.var_type[col] != 'C')
@@ -700,7 +708,7 @@ __device__ void compute_mtm_move(const GpuModelPtrs &model, const TabuSearchKern
         fix_val = fmin(fmax(fix_val, lb), ub);
 
         /* score is valid only for threadIdx.x == 0 */
-        score = compute_score_single_col_move_warp(model, args, {fix_val, col});
+        score = compute_score_single_col_move_warp(model, args, {fix_val, col}, solution_index);
 
         /* Write violation to smem. */
         if (thread_idx_warp == 0)
@@ -718,7 +726,7 @@ __device__ void compute_mtm_move(const GpuModelPtrs &model, const TabuSearchKern
 }
 
 /* On exit, best_scores and best_random_moves contain for each block the best move and score found by the block. Consequently, best_scores and best_random_moves need to be larger than the grid dimension. */
-__global__ void compute_random_moves_kernel(const GpuModelPtrs model, TabuSearchKernelArgs args, move_config config)
+__global__ void compute_random_moves_kernel(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, move_config config, const int solution_index)
 {
     const int thread_idx = threadIdx.x;
     const int warp_id = thread_idx / WARP_SIZE;
@@ -759,11 +767,11 @@ __global__ void compute_random_moves_kernel(const GpuModelPtrs model, TabuSearch
 
             assert(beg <= col && col < end);
 
-            if (is_tabu(args.tabu, col, args.iter, args.tabu_tenure))
+            if (is_tabu(args.tabu, col + solution_index * args.ncols, args.iter, args.tabu_tenure))
                 continue;
 
             /* Compute a move for the picked column. */
-            compute_random_move(model, random_state[warp_id], args, col, best_score[warp_id], best_move[warp_id]);
+            compute_random_move(model, random_state[warp_id], args, col, best_score[warp_id], best_move[warp_id], solution_index);
         }
     }
 
@@ -773,7 +781,7 @@ __global__ void compute_random_moves_kernel(const GpuModelPtrs model, TabuSearch
 /* On exit, best_scores and best oneopt move (greedy or feasible) contain for each block the best move and score found by the block. Consequently, best_scores and best_oneopt_moves need to be larger than the grid dimension.
 TODO: specialize for n_moves >= n_cols */
 template <const bool GREEDY>
-__global__ void compute_oneopt_moves_kernel(const GpuModelPtrs model, TabuSearchKernelArgs args, move_config config)
+__global__ void compute_oneopt_moves_kernel(const GpuModelPtrs& model, const TabuSearchKernelArgs args, move_config config, const int solution_index)
 {
     const int thread_idx = threadIdx.x;
     const int warp_id = thread_idx / WARP_SIZE;
@@ -812,18 +820,18 @@ __global__ void compute_oneopt_moves_kernel(const GpuModelPtrs model, TabuSearch
 
             assert(beg <= col && col < end);
 
-            if (is_tabu(args.tabu, col, args.iter, args.tabu_tenure))
+            if (is_tabu(args.tabu, col + solution_index * args.ncols, args.iter, args.tabu_tenure))
                 continue;
 
             /* Compute a move for the picked column. */
-            compute_oneopt_move<GREEDY>(model, args, col, best_score[warp_id], best_move[warp_id]);
+            compute_oneopt_move<GREEDY>(model, args, col, best_score[warp_id], best_move[warp_id], solution_index);
         }
     }
 
     reduce_and_offload_best_score_in_block(best_score, best_move, config);
 }
 
-__global__ void compute_flip_moves_kernel(const GpuModelPtrs model, TabuSearchKernelArgs args, move_config config)
+__global__ void compute_flip_moves_kernel(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, move_config config, const int solution_index)
 {
     const int thread_idx = threadIdx.x;
     const int warp_id = thread_idx / WARP_SIZE;
@@ -862,18 +870,18 @@ __global__ void compute_flip_moves_kernel(const GpuModelPtrs model, TabuSearchKe
 
             assert(beg <= col && col < end);
 
-            if (is_tabu(args.tabu, col, args.iter, args.tabu_tenure))
+            if (is_tabu(args.tabu, col + solution_index * args.ncols, args.iter, args.tabu_tenure))
                 continue;
 
             /* Compute a move for the picked column. */
-            compute_flip_move(model, args, col, best_score[warp_id], best_move[warp_id]);
+            compute_flip_move(model, args, col, best_score[warp_id], best_move[warp_id], solution_index);
         }
     }
 
     reduce_and_offload_best_score_in_block(best_score, best_move, config);
 }
 
-__global__ void compute_mtm_sat_moves_kernel(const GpuModelPtrs model, TabuSearchKernelArgs args, move_config config)
+__global__ void compute_mtm_sat_moves_kernel(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, move_config config, const int solution_index)
 {
     const int thread_idx = threadIdx.x;
     const int warp_id = thread_idx / WARP_SIZE;
@@ -892,7 +900,7 @@ __global__ void compute_mtm_sat_moves_kernel(const GpuModelPtrs model, TabuSearc
 
     __syncthreads();
 
-    const int n_feasible = args.nrows - args.n_violated;
+    const int n_feasible = args.nrows - args.n_violated[solution_index];
     auto [beg, end] = get_warp_sampling_range(n_feasible, config.n_samples);
 
     const int row_range = end - beg;
@@ -914,14 +922,14 @@ __global__ void compute_mtm_sat_moves_kernel(const GpuModelPtrs model, TabuSearc
             assert(beg <= row && row < end);
 
             /* Compute a move for all columns in the picked row. */
-            compute_mtm_move(model, args, row, best_score[warp_id], best_move[warp_id]);
+            compute_mtm_move(model, args, row, best_score[warp_id], best_move[warp_id], solution_index);
         }
     }
 
     reduce_and_offload_best_score_in_block(best_score, best_move, config);
 }
 
-__global__ void compute_mtm_unsat_moves_kernel(const GpuModelPtrs model, TabuSearchKernelArgs args, move_config config)
+__global__ void compute_mtm_unsat_moves_kernel(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, move_config config, const int solution_index)
 {
     const int thread_idx = threadIdx.x;
     const int warp_id = thread_idx / WARP_SIZE;
@@ -940,7 +948,7 @@ __global__ void compute_mtm_unsat_moves_kernel(const GpuModelPtrs model, TabuSea
 
     __syncthreads();
 
-    auto [beg, end] = get_warp_sampling_range(args.n_violated, config.n_samples);
+    auto [beg, end] = get_warp_sampling_range(args.n_violated[solution_index], config.n_samples);
 
     const int row_range = end - beg;
 
@@ -961,7 +969,7 @@ __global__ void compute_mtm_unsat_moves_kernel(const GpuModelPtrs model, TabuSea
             assert(beg <= row && row < end);
 
             /* Compute a move for all columns in the picked row. */
-            compute_mtm_move(model, args, row, best_score[warp_id], best_move[warp_id]);
+            compute_mtm_move(model, args, row, best_score[warp_id], best_move[warp_id], solution_index);
         }
     }
 
@@ -971,7 +979,8 @@ __global__ void compute_mtm_unsat_moves_kernel(const GpuModelPtrs model, TabuSea
 template <const bool SMOOTHING>
 __global__ void update_weights_kernel(
     const GpuModelPtrs model,
-    TabuSearchKernelArgs args
+    const TabuSearchKernelArgs& args,
+    const int solution_index
 )
 {
     const int row_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -979,54 +988,58 @@ __global__ void update_weights_kernel(
     if (row_idx >= args.nrows)
         return;
 
+    const int row_idx_scaled = row_idx + solution_index * args.nrows;
+
+
     // Check if constraint is violated
-    const double slack = args.slacks[row_idx];
-    const bool is_eq = (model.row_sense[row_idx] == 'E');
+    const double slack = args.slacks[row_idx_scaled];
+    const bool is_eq = model.row_sense[row_idx] == 'E';
     const bool is_violated = is_eq ? !is_eq_feas(slack, 0) : is_lt_feas(slack, 0);
 
     if (SMOOTHING) {
         // Smooth phase: decrease weights on satisfied constraints
-        if (!is_violated && args.constraint_weights[row_idx] > 0) {
-            args.constraint_weights[row_idx] -= 1.0;
+        if (!is_violated && args.constraint_weights[row_idx_scaled] > 0) {
+            args.constraint_weights[row_idx_scaled] -= 1.0;
         } else  if (is_violated) {
             // Penalize phase: increase weights on violated constraints
-            args.constraint_weights[row_idx] += 1.0;
+            args.constraint_weights[row_idx_scaled] += 1.0;
         }
     } else {
         // Monotone: always increase weights on violated constraints
         if (is_violated) {
-            args.constraint_weights[row_idx] += 1.0;
+            args.constraint_weights[row_idx_scaled] += 1.0;
         }
     }
 
     // Special handling for objective (when feasible found)
     if (row_idx == 0 && args.is_found_feasible) {
-        bool all_feasible = (args.n_violated == 0);
+        const bool all_feasible = args.n_violated[solution_index] == 0;
         if (all_feasible) {
             // Increase objective weight when all constraints satisfied
-            *args.objective_weight += 1.0;
+            args.objective_weight[solution_index] += 1.0;
         }
     }
 }
 
-__global__ void apply_move(const GpuModelPtrs model, TabuSearchKernelArgs args, single_col_move* best_move)
+__global__ void apply_move(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, single_col_move* best_move, const int solution_index)
 {
     const int thread_idx = threadIdx.x;
     const double val = best_move->val;
     const int col = best_move->col;
+    const int scaled_col = col + solution_index * args.ncols;
     const double obj = model.objective[col];
 
-    const double old_val = args.sol[col];
+    const double old_val = args.sol[scaled_col];
     assert(model.lb[col] <= val && val <= model.ub[col]);
     assert_if_then(model.var_type[col] != 'C', is_integer(val));
     assert(!is_eq(old_val, val));
 
-    if (thread_idx == 0)
-    {
-        printf("Applying move jcol %d [%g, %g], cost %g : %g -> %g\n", col, model.lb[col], model.ub[col], obj, old_val, val);
+    if (thread_idx == 0) {
+        printf("Applying move jcol %d [%g, %g], cost %g : %g -> %g\n", col, model.lb[col], model.ub[col], obj, old_val,
+               val);
     }
 
-    assert(!is_tabu(args.tabu, col, args.iter, args.tabu_tenure));
+    assert(!is_tabu(args.tabu, col + solution_index * args.ncols, args.iter, args.tabu_tenure));
 
     /* Iterate column and apply changes in slack. */
     const int col_beg = model.row_ptr_trans[col];
@@ -1035,15 +1048,15 @@ __global__ void apply_move(const GpuModelPtrs model, TabuSearchKernelArgs args, 
     for (int inz = col_beg + thread_idx; inz < col_end; inz += blockDim.x)
     {
         const double coef = model.row_val_trans[inz];
-        const int row_idx = model.col_idx_trans[inz];
+        const int scaled_row_idx = model.col_idx_trans[inz] + solution_index * args.nrows;
 
         /* slack = rhs - Ax */
-        args.slacks[row_idx] += (old_val - val) * coef;
+        args.slacks[scaled_row_idx] += (old_val - val) * coef;
     }
 
     if (thread_idx == 0) {
-        args.tabu[col] = args.iter;
-        args.sol[col] = val;
+        args.tabu[scaled_col] = args.iter;
+        args.sol[scaled_col] = val;
     }
 }
 
@@ -1056,7 +1069,7 @@ __global__ void csr_spmv_kernel(
     double *__restrict__ sol,
     double alpha,
     double *__restrict__ y) {
-    int linear_index = blockIdx.x * blockDim.x + threadIdx.x;
+    const int linear_index = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (linear_index >= nrows * n_solutions) return;
 
@@ -1064,11 +1077,13 @@ __global__ void csr_spmv_kernel(
     int row = linear_index % nrows;
     double row_sum = 0.0;
 
-    int inz_start = model.row_ptr[row];
-    int inz_end = model.row_ptr[row + 1];
+    const int inz_start = model.row_ptr[row];
+    const int inz_end = model.row_ptr[row + 1];
 
-    for (int inz = inz_start; inz < inz_end; ++inz)
-        row_sum += model.row_val[inz] * sol[model.col_idx[inz] +  solution_idx * ncols];
+    for (int inz = inz_start; inz < inz_end; ++inz) {
+        const int scaled_col = model.col_idx[inz] +  solution_idx * ncols;
+        row_sum += model.row_val[inz] * sol[scaled_col];
+    }
 
     y[linear_index] += alpha * row_sum;
 }
@@ -1161,7 +1176,7 @@ std::tuple<std::array<int, AVAILABLE_MOVES>, std::array<move_config, AVAILABLE_M
         n_blocks_total += blocks_per_move[i];
     }
 
-    /* Potentiall resize the result arrays and THEN, distribute them among the move kernels. */
+    /* Potentially resize the result arrays and THEN, distribute them among the move kernels. */
     if (static_cast<int>(best_scores_single_col.size()) < n_blocks_total) {
         best_scores_single_col.resize(n_blocks_total);
         best_single_col_moves.resize(n_blocks_total);
@@ -1194,8 +1209,7 @@ std::tuple<std::array<int, AVAILABLE_MOVES>, std::array<move_config, AVAILABLE_M
     return {blocks_per_move, config_per_move, n_blocks_total};
 }
 
-void EvolutionSearch::run()
-{
+void EvolutionSearch::run() const {
     int seed = 0;
 
     /* For smoothing decision. */
@@ -1218,7 +1232,7 @@ void EvolutionSearch::run()
     auto gpu_model_ptrs = model_device.get_ptrs();
 
 
-    TabuSearchDataDevice data_device(model_host.nrows, model_host.ncols, n_solutions, tabu_tenure);
+    TabuSearchDataDevice data_device(model_host.nrows, model_host.ncols, tabu_tenure, n_solutions);
 
     //initiliaze the solution vector with 3 solutions
     // 1. the zero vector within variable bounds
@@ -1278,7 +1292,7 @@ void EvolutionSearch::run()
             }
         }
     }
-    thrust::copy(sum_slack.begin(), sum_slack.end(), data_device.sum_slacks.begin());
+    thrust::copy(sum_slack.begin(), sum_slack.end(), data_device.sum_viol.begin());
 
     // // TODO : move to device.
     // {
@@ -1385,117 +1399,119 @@ void EvolutionSearch::run()
 
         thrust::copy(n_violated_host.begin(), n_violated_host.end(), data_device.n_violated.begin());
         //TODO: we want to continue or not?
-        for (int i= 0 ; i < n_solutions; ++i)
+        for (int i = 0; i < n_solutions; ++i)
             if (n_violated_host[i] == 0) {
                 consoleInfo("Found feasible!");
                 return;
             }
+        for (int solution_index = 0; solution_index < n_solutions; ++solution_index) {
+            /* Update the moves distribution, compute number of moves and blocks per moves kernel. This might reallocate best_scores_single_col and best_single_col_moves. Updates global seed count and assignes each kernel a unique seed. */
+            const auto [blocks_per_move, config_per_move, n_blocks_total] = prepare_sample_submission(
+                best_scores_single_col, best_single_col_moves, probabilities, seed, nmoves_total);
 
-        /* Update the moves distribution, compute number of moves and blocks per moves kernel. This might reallocate best_scores_single_col and best_single_col_moves. Updates global seed count and assignes each kernel a unique seed. */
-        const auto [blocks_per_move, config_per_move, n_blocks_total] = prepare_sample_submission(best_scores_single_col, best_single_col_moves, probabilities, seed, nmoves_total);
+            // for ( int i = 0; i < args_device.n_violated; i++) {
+            //     consoleLog("Index: {}",data_device.violated_constraints[i]);
+            //
 
-        // for ( int i = 0; i < args_device.n_violated; i++) {
-        //     consoleLog("Index: {}",data_device.violated_constraints[i]);
-        //
+            move_score* best_scores_single_col_ptr = thrust::raw_pointer_cast(best_scores_single_col.data());
+            single_col_move* best_single_col_moves_ptr = thrust::raw_pointer_cast(best_single_col_moves.data());
 
-        move_score* best_scores_single_col_ptr = thrust::raw_pointer_cast(best_scores_single_col.data());
-        single_col_move* best_single_col_moves_ptr = thrust::raw_pointer_cast(best_single_col_moves.data());
+            if (blocks_per_move[0] > 0) {
+                compute_random_moves_kernel<<<blocks_per_move[0], BLOCKSIZE_MOVE>>>(
+                    gpu_model_ptrs, args_device, config_per_move[0], solution_index);
+            }
 
-        if (blocks_per_move[0] > 0) {
-            compute_random_moves_kernel<<<blocks_per_move[0], BLOCKSIZE_MOVE>>>(
-                gpu_model_ptrs, args_device, config_per_move[0]);
-        }
+            if (blocks_per_move[1] > 0) {
+                compute_oneopt_moves_kernel<false><<<blocks_per_move[1], BLOCKSIZE_MOVE>>>(
+                    gpu_model_ptrs, args_device, config_per_move[1], solution_index);
+            }
 
-        if (blocks_per_move[1] > 0) {
-            compute_oneopt_moves_kernel<false><<<blocks_per_move[1], BLOCKSIZE_MOVE>>>(
-                gpu_model_ptrs, args_device, config_per_move[1]);
-        }
+            if (blocks_per_move[2] > 0) {
+                compute_oneopt_moves_kernel<true><<<blocks_per_move[2], BLOCKSIZE_MOVE>>>(
+                    gpu_model_ptrs, args_device, config_per_move[2], solution_index);
+            }
 
-        if (blocks_per_move[2] > 0) {
-            compute_oneopt_moves_kernel<true><<<blocks_per_move[2], BLOCKSIZE_MOVE>>>(
-                gpu_model_ptrs, args_device, config_per_move[2]);
-        }
+            if (blocks_per_move[3] > 0) {
+                compute_flip_moves_kernel<<<blocks_per_move[3], BLOCKSIZE_MOVE>>>(
+                    gpu_model_ptrs, args_device, config_per_move[3], solution_index);
+            }
 
-        if (blocks_per_move[3] > 0) {
-            compute_flip_moves_kernel<<<blocks_per_move[3], BLOCKSIZE_MOVE>>>(
-                gpu_model_ptrs, args_device, config_per_move[3]);
-        }
+            if (blocks_per_move[4] > 0) {
+                compute_mtm_unsat_moves_kernel<<<blocks_per_move[4], BLOCKSIZE_MOVE>>>(
+                    gpu_model_ptrs, args_device, config_per_move[4], solution_index);
+            }
 
-        if (blocks_per_move[4] > 0) {
-            compute_mtm_unsat_moves_kernel<<<blocks_per_move[4], BLOCKSIZE_MOVE>>>(
-                gpu_model_ptrs, args_device, config_per_move[4]);
-        }
+            if (blocks_per_move[5] > 0) {
+                compute_mtm_sat_moves_kernel<<<blocks_per_move[5], BLOCKSIZE_MOVE>>>(
+                    gpu_model_ptrs, args_device, config_per_move[5], solution_index);
+            }
 
-        if (blocks_per_move[5] > 0) {
-            compute_mtm_sat_moves_kernel<<<blocks_per_move[5], BLOCKSIZE_MOVE>>>(
-                gpu_model_ptrs, args_device, config_per_move[5]);
-        }
+            // /* ----- */
+            // thrust::host_vector<move_score> host_scores = best_scores_single_col;
+            // for ( auto &[objective, violation, weighted_violation]: host_scores) {
+            //     consoleLog("{} {} {}", objective, violation, weighted_violation);
+            // }
 
-        // /* ----- */
-        // thrust::host_vector<move_score> host_scores = best_scores_single_col;
-        // for ( auto &[objective, violation, weighted_violation]: host_scores) {
-        //     consoleLog("{} {} {}", objective, violation, weighted_violation);
-        // }
+            /* Reduce best moves to get globally best move. */
+            auto max_iter = thrust::min_element(thrust::device, best_scores_single_col.begin(),
+                                                best_scores_single_col.begin() + n_blocks_total,
+                                                [] __device__(const move_score &a, const move_score &b)
+                                                {
+                                                    return a.is_lt_feas_score(b);
+                                                });
 
-        /* Reduce best moves to get globally best move. */
-        auto max_iter = thrust::min_element(thrust::device, best_scores_single_col.begin(),
-                                            best_scores_single_col.begin() + n_blocks_total,
-                                            [] __device__(const move_score &a, const move_score &b)
-                                            {
-                                                return a.is_lt_feas_score(b);
-                                            });
+            int min_index = max_iter - best_scores_single_col.begin();
+            move_score score = (*max_iter); // Hidden copy GPU -> CPU
 
-        int min_index = max_iter - best_scores_single_col.begin();
-        move_score score = (*max_iter); // Hidden copy GPU -> CPU
+            if (score.weighted_violation_change >= 0.0) {
+                consoleLog("No more good moves; updating weights!");
+                const int n_blocks = (model_host.nrows + BLOCKSIZE_VECTOR_KERNEL - 1) / BLOCKSIZE_VECTOR_KERNEL;
 
-        if (score.weighted_violation_change >= 0.0) {
-            consoleLog("No more good moves; updating weights!");
-            const int n_blocks = (model_host.nrows + BLOCKSIZE_VECTOR_KERNEL - 1) / BLOCKSIZE_VECTOR_KERNEL;
+                /* Update the weights and continue!  */
+                if (dist(gen) < smooth_prob)
+                    update_weights_kernel<true><<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(gpu_model_ptrs, args_device, solution_index);
+                else
+                    update_weights_kernel<false><<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(gpu_model_ptrs, args_device, solution_index);
 
-            /* Update the weigths and continue!  */
-            if (dist(gen) < smooth_prob)
-                update_weights_kernel<true><<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(gpu_model_ptrs, args_device);
+                continue;
+            }
+
+            double min_value = score.weighted_violation_change;
+            assert(min_value != DBL_MAX && min_value < 0.0);
+
+            int offset_random = 0;
+            int offset_oneopt = offset_random + blocks_per_move[0];
+            int offset_oneopt_greedy = offset_oneopt + blocks_per_move[1];
+            int offset_flip = offset_oneopt_greedy + blocks_per_move[2];
+            int offset_mtm_unsat = offset_flip + blocks_per_move[3];
+            int offset_mtm_sat = offset_mtm_unsat + blocks_per_move[4];
+
+            std::string move_name;
+            if (min_index >= offset_mtm_sat)
+                move_name = "mtm_sat";
+            else if (min_index >= offset_mtm_unsat)
+                move_name = "mtm_unsat";
+            else if (min_index >= offset_flip)
+                move_name = "flip";
+            else if (min_index >= offset_oneopt_greedy)
+                move_name = "oneopt_greedy";
+            else if (min_index >= offset_oneopt)
+                move_name = "oneopt";
+            else if (min_index >= offset_random)
+                move_name = "random";
             else
-                update_weights_kernel<false><<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(gpu_model_ptrs, args_device);
+                move_name = "unknown";
 
-            continue;
+            consoleLog("[{}-sol] Taking {} move", solution_index , move_name);
+            consoleLog("[{}-sol] (idx, move_score: (obj_change, slack_change, score)): {} ({}, {}, {})", solution_index, min_index, score.objective_change, score.violation_change, score.weighted_violation_change);
+
+            /* Apply best move. */
+            apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index, solution_index);
+
+            args_device.objective[solution_index] += score.objective_change;
+            args_device.sum_viol[solution_index] += score.violation_change;
+
+            consoleLog("[{}-sol] (objective, sum_viol): {} {}", solution_index, args_device.objective[solution_index], args_device.sum_viol[solution_index]);
         }
-
-        double min_value = score.weighted_violation_change;
-        assert(min_value != DBL_MAX && min_value < 0.0);
-
-        int offset_random = 0;
-        int offset_oneopt = offset_random + blocks_per_move[0];
-        int offset_oneopt_greedy = offset_oneopt + blocks_per_move[1];
-        int offset_flip = offset_oneopt_greedy + blocks_per_move[2];
-        int offset_mtm_unsat = offset_flip + blocks_per_move[3];
-        int offset_mtm_sat = offset_mtm_unsat + blocks_per_move[4];
-
-        std::string move_name;
-        if (min_index >= offset_mtm_sat)
-            move_name = "mtm_sat";
-        else if (min_index >= offset_mtm_unsat)
-            move_name = "mtm_unsat";
-        else if (min_index >= offset_flip)
-            move_name = "flip";
-        else if (min_index >= offset_oneopt_greedy)
-            move_name = "oneopt_greedy";
-        else if (min_index >= offset_oneopt)
-            move_name = "oneopt";
-        else if (min_index >= offset_random)
-            move_name = "random";
-        else
-            move_name = "unknown";
-
-        consoleLog("Taking {} move", move_name);
-        consoleLog("(idx, move_score: (obj_change, slack_change, score)): {} ({}, {}, {})", min_index, score.objective_change, score.violation_change, score.weighted_violation_change);
-
-        /* Apply best move. */
-        apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index);
-
-        args_device.objective += score.objective_change;
-        args_device.sum_viol += score.violation_change;
-
-        consoleLog("(objective, sum_viol): {} {}", args_device.objective, args_device.sum_viol);
     }
 };

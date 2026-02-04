@@ -15,5 +15,5 @@ public:
 
     EvolutionSearch(const MIPInstance& model_host_, const GpuModel& model_device_) : model_host(model_host_), model_device(model_device_) {};
 
-    void run();
+    void run() const;
 };
