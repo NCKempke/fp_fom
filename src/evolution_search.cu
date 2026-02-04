@@ -218,6 +218,7 @@ struct TabuSearchDataDevice
     thrust::device_vector<int> tabu;
     thrust::device_vector<double> sum_slacks;
     thrust::device_vector<double> objective;
+    thrust::device_vector<int> n_violated;
 
     /* Objective and constraint weights initialized with 1. */
     thrust::device_vector<double> constraint_weights;
@@ -235,6 +236,7 @@ struct TabuSearchDataDevice
           tabu(ncols_ * n_solutions, -tabu_tenure),
           sum_slacks(n_solutions, 0.0),
           objective(n_solutions, 0.0),
+          n_violated(n_solutions, 0.0),
           constraint_weights(nrows_ * n_solutions, 1),
           objective_weight(1, 1),
           best_scores_single_col(N_BLOCKS_SINGLE_COL_MOVE * AVAILABLE_MOVES, {DBL_MAX, DBL_MAX}),
@@ -266,7 +268,7 @@ struct TabuSearchKernelArgs
     double* sum_slack;
     double* objective;
 
-    int n_violated{};
+    int* n_violated;
     int iter{};
     int nrows;
     int ncols;
@@ -285,6 +287,7 @@ struct TabuSearchKernelArgs
         violated_constraints(thrust::raw_pointer_cast(data.violated_constraints.data())),
         sum_slack(thrust::raw_pointer_cast(data.sum_slacks.data())),
         objective(thrust::raw_pointer_cast(data.objective.data())),
+        n_violated(thrust::raw_pointer_cast(data.n_violated.data())),
         nrows(nrows_), ncols(ncols_), tabu_tenure(tabu_tenure_) {
     };
 };
@@ -1276,7 +1279,7 @@ void EvolutionSearch::run()
             model_device.objective.begin(),
             0.0);
     }
-    thrust::copy(obj.begin(), obj.end(), data_device.obje.begin());
+    thrust::copy(obj.begin(), obj.end(), data_device.objective.begin());
 
     consoleInfo("Starting evolution search on GPU");
 
@@ -1323,21 +1326,28 @@ void EvolutionSearch::run()
         args_device.random_seed = (AVAILABLE_MOVES * N_MAX_BLOCKS_PER_MOVE) * i_round;
         int nmoves = 1e5;
 
-        thrust::sequence(data_device.violated_constraints.begin(), data_device.violated_constraints.end()); /* Set to 0,1,...,nrows-1. */
+        for (int i= 0 ; i < n_solutions; ++i)
+            thrust::sequence(data_device.violated_constraints.begin() + i * model_host.nrows, data_device.violated_constraints.begin() + (i+1) * model_host.nrows); /* Set to 0,1,...,nrows-1. */
 
-        auto partition_point = thrust::partition(
-            thrust::device,
-            data_device.violated_constraints.begin(),
-            data_device.violated_constraints.end(),
-            IsViolated{args_device.slacks, gpu_model_ptrs.row_sense});
-
-        args_device.n_violated = partition_point - data_device.violated_constraints.begin();
-        consoleLog("Found {} violated constraints", args_device.n_violated);
-
-        if (args_device.n_violated == 0) {
-            consoleInfo("Found feasible!");
-            return;
+        std::vector<int> n_violated_host (n_solutions, 0);
+        for (int i = 0; i < n_solutions; ++i) {
+            auto start_index = data_device.violated_constraints.begin() + i * model_host.nrows;
+            auto partition_point = thrust::partition(
+                thrust::device,
+                start_index,
+                data_device.violated_constraints.begin() + (i + 1) * model_host.nrows,
+                IsViolated{args_device.slacks + i * model_host.nrows, gpu_model_ptrs.row_sense});
+            n_violated_host[i] = partition_point - start_index;
+            consoleLog("Found {} violated constraints", n_violated_host[i]);
         }
+
+        thrust::copy(n_violated_host.begin(), n_violated_host.end(), data_device.n_violated.begin());
+        //TODO: we want to continue or not?
+        for (int i= 0 ; i < n_solutions; ++i)
+            if (n_violated_host[i] == 0) {
+                consoleInfo("Found feasible!");
+                return;
+            }
 
 
          // for ( int i = 0; i < args_device.n_violated; i++) {
