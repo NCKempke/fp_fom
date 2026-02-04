@@ -1375,7 +1375,7 @@ void EvolutionSearch::run() const {
         }
 
         thrust::copy(n_violated_host.begin(), n_violated_host.end(), data_device.n_violated.begin());
-        //TODO: we want to continue or not?
+        //TODO: AH @ NP we have enough time, I think we want to continue to improve the solution?
         for (int i = 0; i < n_solutions; ++i)
             if (n_violated_host[i] == 0) {
                 consoleInfo("Found feasible!");
@@ -1383,6 +1383,7 @@ void EvolutionSearch::run() const {
             }
         for (int solution_index = 0; solution_index < n_solutions; ++solution_index) {
             /* Update the moves distribution, compute number of moves and blocks per moves kernel. This might reallocate best_scores_single_col and best_single_col_moves. Updates global seed count and assignes each kernel a unique seed. */
+            //TODO: make this solution dynamic
             const auto [blocks_per_move, config_per_move, n_blocks_total] = prepare_sample_submission(
                 best_scores_single_col, best_single_col_moves, probabilities, seed, nmoves_total);
 
@@ -1485,6 +1486,7 @@ void EvolutionSearch::run() const {
             /* Apply best move. */
             apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index, solution_index);
 
+            /* update the objective and violations */
             update_objective_sum_viol<<<1, 1014>>>(args_device, score.objective_change, score.violation_change, solution_index);
 
 
