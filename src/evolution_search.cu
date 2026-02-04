@@ -1073,7 +1073,7 @@ __global__ void csr_spmv_kernel(
 
     if (linear_index >= nrows * n_solutions) return;
 
-    int solution_idx = linear_index / n_solutions;
+    int solution_idx = linear_index / nrows;
     int row = linear_index % nrows;
     double row_sum = 0.0;
 
