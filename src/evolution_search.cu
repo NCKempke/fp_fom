@@ -216,25 +216,34 @@ struct TabuSearchDataDevice
     thrust::device_vector<double> sol;
     thrust::device_vector<double> slacks;
     thrust::device_vector<int> tabu;
+    thrust::device_vector<double> sum_slacks;
+    thrust::device_vector<double> objective;
 
     /* Objective and constraint weights initialized with 1. */
     thrust::device_vector<double> constraint_weights;
     thrust::device_vector<double> objective_weight;
 
     thrust::device_vector<move_score> best_scores_single_col;
+
     thrust::device_vector<single_col_move> best_single_col_moves;
+
     thrust::device_vector<int> violated_constraints;
 
-    // Constructor
-    TabuSearchDataDevice(int nrows_, int ncols_, int tabu_tenure)
-        : sol(ncols_, 0.0),
-          slacks(nrows_, 0.0),
-          tabu(ncols_, -tabu_tenure),
-          constraint_weights(nrows_, 1),
+    TabuSearchDataDevice(int nrows_, int ncols_, int tabu_tenure, int n_solutions)
+        : sol(ncols_ * n_solutions, 0.0),
+          slacks(nrows_ * n_solutions, 0.0),
+          tabu(ncols_ * n_solutions, -tabu_tenure),
+          sum_slacks(n_solutions, 0.0),
+          objective(n_solutions, 0.0),
+          constraint_weights(nrows_ * n_solutions, 1),
           objective_weight(1, 1),
           best_scores_single_col(N_BLOCKS_SINGLE_COL_MOVE * AVAILABLE_MOVES, {DBL_MAX, DBL_MAX}),
           best_single_col_moves(N_BLOCKS_SINGLE_COL_MOVE * AVAILABLE_MOVES),
-          violated_constraints(nrows_) {};
+          violated_constraints(nrows_ * n_solutions) {
+    }
+
+    // Constructor
+    ;
 };
 
 struct TabuSearchKernelArgs
@@ -254,8 +263,8 @@ struct TabuSearchKernelArgs
     /* Contains a partition of violated constraints first, satisfied constraints later. */
     const int *violated_constraints;
 
-    double sum_slack{};
-    double objective{};
+    double* sum_slack;
+    double* objective;
 
     int n_violated{};
     int iter{};
@@ -267,14 +276,16 @@ struct TabuSearchKernelArgs
     size_t random_seed{};
 
     TabuSearchKernelArgs(TabuSearchDataDevice& data, int nrows_, int ncols_, int tabu_tenure_) : sol(thrust::raw_pointer_cast(data.sol.data())),
-    slacks(thrust::raw_pointer_cast(data.slacks.data())),
-    tabu(thrust::raw_pointer_cast(data.tabu.data())),
-    constraint_weights(thrust::raw_pointer_cast(data.constraint_weights.data())),
-    objective_weight(thrust::raw_pointer_cast(data.objective_weight.data())),
-    best_scores_single_col(thrust::raw_pointer_cast(data.best_scores_single_col.data())),
-    best_single_col_moves(thrust::raw_pointer_cast(data.best_single_col_moves.data())),
-    violated_constraints(thrust::raw_pointer_cast(data.violated_constraints.data())),
-    nrows(nrows_), ncols(ncols_), tabu_tenure(tabu_tenure_) {
+        slacks(thrust::raw_pointer_cast(data.slacks.data())),
+        tabu(thrust::raw_pointer_cast(data.tabu.data())),
+        constraint_weights(thrust::raw_pointer_cast(data.constraint_weights.data())),
+        objective_weight(thrust::raw_pointer_cast(data.objective_weight.data())),
+        best_scores_single_col(thrust::raw_pointer_cast(data.best_scores_single_col.data())),
+        best_single_col_moves(thrust::raw_pointer_cast(data.best_single_col_moves.data())),
+        violated_constraints(thrust::raw_pointer_cast(data.violated_constraints.data())),
+        sum_slack(thrust::raw_pointer_cast(data.sum_slacks.data())),
+        objective(thrust::raw_pointer_cast(data.objective.data())),
+        nrows(nrows_), ncols(ncols_), tabu_tenure(tabu_tenure_) {
     };
 };
 
@@ -1102,24 +1113,27 @@ __global__ void apply_move(const GpuModelPtrs model, TabuSearchKernelArgs args, 
 
 __global__ void csr_spmv_kernel(
     int nrows,
+    int ncols,
+    int n_solutions,
     const GpuModelPtrs model,
-    double* __restrict__ sol,
+    double *__restrict__ sol,
     double alpha,
-    double* __restrict__ y)
-{
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    double *__restrict__ y) {
+    int linear_index = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (row >= nrows) return;
+    if (linear_index >= nrows * n_solutions) return;
 
-    double sum = 0.0;
+    int solution_idx = linear_index / n_solutions;
+    int row = linear_index % nrows;
+    double row_sum = 0.0;
 
     int inz_start = model.row_ptr[row];
-    int inz_end   = model.row_ptr[row+1];
+    int inz_end = model.row_ptr[row + 1];
 
     for (int inz = inz_start; inz < inz_end; ++inz)
-        sum += model.row_val[inz] * sol[model.col_idx[inz]];
+        row_sum += model.row_val[inz] * sol[model.col_idx[inz] +  solution_idx * ncols];
 
-    y[row] += alpha * sum;
+    y[linear_index] += alpha * row_sum;
 }
 
 double thrust_dot_product(const thrust::device_vector<double> &a,
@@ -1155,49 +1169,70 @@ struct IsViolated
 
 void EvolutionSearch::run()
 {
+    int n_solutions = 3;
     auto gpu_model_ptrs = model_device.get_ptrs();
 
-    //generate  0 - solution
-    TabuSearchDataDevice data_device(model_host.nrows, model_host.ncols, tabu_tenure);
 
+    TabuSearchDataDevice data_device(model_host.nrows, model_host.ncols, n_solutions, tabu_tenure);
+
+    //initiliaze the solution vector with 3 solutions
+    // 1. the zero vector within variable bounds
+    // 2. the lower bounds
+    // 3. the upper bounds
     thrust::fill(data_device.sol.begin(), data_device.sol.end(), 0.0);
     thrust::transform(
-        data_device.sol.begin(), data_device.sol.end(),
+        data_device.sol.begin(), data_device.sol.begin() + model_host.ncols,
         model_device.lb.begin(),
         data_device.sol.begin(),
         cuda::maximum<double>()
     );
     thrust::transform(
-        data_device.sol.begin(), data_device.sol.end(),
+        data_device.sol.begin(), data_device.sol.begin() + model_host.ncols,
         model_device.ub.begin(),
         data_device.sol.begin(),
         cuda::minimum<double>()
     );
 
+    thrust::copy(
+        model_host.lb.begin(),
+        model_host.lb.end(),
+        data_device.sol.begin() + model_host.ncols
+    );
+    thrust::copy(
+        model_host.ub.begin(),
+        model_host.ub.end(),
+        data_device.sol.begin() + model_host.ncols
+    );
+
     TabuSearchKernelArgs args_device(data_device, model_host.nrows, model_host.ncols, tabu_tenure);
 
+    assert(data_device.slacks.size() == n_solutions * model_host.nrows);
     // calculate slack and sum_slack
-    thrust::copy(model_device.rhs.begin(), model_device.rhs.end(), data_device.slacks.begin());
-    csr_spmv_kernel<<<N_BLOCKS_SINGLE_COL_MOVE, BLOCKSIZE_SINGLE_COL_MOVE>>>(model_device.nrows, gpu_model_ptrs, thrust::raw_pointer_cast(data_device.sol.data()), -1.0,
+    for (int i =0; i < n_solutions; ++i) {
+        thrust::copy(model_device.rhs.begin(), model_device.rhs.end(), data_device.slacks.begin() + i * model_host.nrows);
+    }
+    csr_spmv_kernel<<<N_BLOCKS_SINGLE_COL_MOVE, BLOCKSIZE_SINGLE_COL_MOVE>>>(model_device.nrows, model_device.ncols, n_solutions, gpu_model_ptrs, thrust::raw_pointer_cast(data_device.sol.data()), -1.0,
                 thrust::raw_pointer_cast(data_device.slacks.data()));
 
     //TODO move this too to device
-    double sum_slack = 0.0;
-    for (int irow = 0; irow < model_host.nrows; ++irow)
-    {
-        const double slack_row = data_device.slacks[irow];
-        FP_ASSERT(model_host.sense[irow] == 'L' || model_host.sense[irow] == 'E');
+    std::vector<double> sum_slack (3,0);
+    for (int i =0; i < n_solutions; ++i) {
+        for (int irow = i* n_solutions; irow < model_host.nrows + (i+1) * n_solutions; ++irow)
+        {
+            const double slack_row = data_device.slacks[irow];
+            FP_ASSERT(model_host.sense[irow] == 'L' || model_host.sense[irow] == 'E');
 
-        if (model_host.sense[irow] == 'L' && is_lt_feas(slack_row, 0))
-        {
-            sum_slack += fabs(slack_row);
-        }
-        if (model_host.sense[irow] == 'E' && !is_eq_feas(slack_row, 0))
-        {
-            sum_slack += fabs(slack_row);
+            if (model_host.sense[irow] == 'L' && is_lt_feas(slack_row, 0))
+            {
+                sum_slack[i] += fabs(slack_row);
+            }
+            if (model_host.sense[irow] == 'E' && !is_eq_feas(slack_row, 0))
+            {
+                sum_slack[i] += fabs(slack_row);
+            }
         }
     }
-    args_device.sum_slack = sum_slack;
+    thrust::copy(sum_slack.begin(), sum_slack.end(), data_device.sum_slacks.begin());
 
     // // TODO : move to device.
     // {
@@ -1233,7 +1268,15 @@ void EvolutionSearch::run()
     //     args_device.sum_slack = sum_slack;
     // }
 
-    args_device.objective = thrust_dot_product(data_device.sol, model_device.objective);
+    assert(data_device.sol.size() == n_solutions * model_host.ncols);
+    std::vector<double> obj (3,0);
+    for (int i = 0; i < n_solutions; ++i) {
+        obj[i] = thrust::inner_product(
+            data_device.sol.begin() + i * model_host.ncols, data_device.sol.begin() + (i + 1) * model_host.ncols,
+            model_device.objective.begin(),
+            0.0);
+    }
+    thrust::copy(obj.begin(), obj.end(), data_device.objective.begin());
 
     consoleInfo("Starting evolution search on GPU");
 
