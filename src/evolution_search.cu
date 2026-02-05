@@ -1258,8 +1258,8 @@ std::tuple<std::array<int, AVAILABLE_MOVES>, std::array<move_config, AVAILABLE_M
     return {blocks_per_move, config_per_move, n_blocks_total};
 }
 
-void copy_solution_to_device(int solution_index, std::vector<double> &primal, TabuSearchDataDevice &data_device,
-                             GpuModel& model, const GpuModelPtrs &model_ptrs) {
+void copy_solution_to_device(const int solution_index, std::vector<double> &primal, TabuSearchDataDevice &data_device,
+                             const GpuModel& model, const GpuModelPtrs &model_ptrs) {
     thrust::copy(
         primal.begin(),
         primal.end(),
@@ -1267,28 +1267,25 @@ void copy_solution_to_device(int solution_index, std::vector<double> &primal, Ta
     );
     thrust::copy(model.rhs.begin(), model.rhs.end(),
                  data_device.slacks.begin() + solution_index * model.nrows);
-    csr_spmv_kernel_index<<<512, 1024>>>(model.nrows, model.ncols, solution_index, model_ptrs, thrust::raw_pointer_cast(data_device.sol.data()), -1.0,
-                thrust::raw_pointer_cast(data_device.slacks.data()));
+    csr_spmv_kernel_index<<<512, 1024>>>(model.nrows, model.ncols, solution_index, model_ptrs,
+                                         thrust::raw_pointer_cast(data_device.sol.data()), -1.0,
+                                         thrust::raw_pointer_cast(data_device.slacks.data()));
 
     //TODO move this too to device
     double sum_viol = 0;
-        for (int irow = 0; irow < model.nrows; ++irow)
-        {
-            FP_ASSERT(model_ptrs.row_sense[irow] == 'L' || model_ptrs.row_sense[irow] == 'E');
+    for (int irow = 0; irow < model.nrows; ++irow) {
+        const int scaled_row = irow + solution_index * model.nrows;
+        const double slack_row = data_device.slacks[scaled_row];
 
-            const int scaled_row = irow + solution_index * model.nrows;
-            const double slack_row = data_device.slacks[scaled_row];
-
-            if (model_ptrs.row_sense[irow] == 'L' && is_lt_feas(slack_row, 0))
-            {
+        // first equalities than inequalities
+        if (irow < model.n_equalities) {
+            if (!is_eq_feas(slack_row, 0))
                 sum_viol += fabs(slack_row);
-            }
-            if (model_ptrs.row_sense[irow] == 'E' && !is_eq_feas(slack_row, 0))
-            {
+        } else {
+            if (is_lt_feas(slack_row, 0))
                 sum_viol += fabs(slack_row);
-            }
         }
-
+    }
     data_device.sum_viol[solution_index] = sum_viol;
 
     data_device.objective[solution_index] = thrust::inner_product(
@@ -1366,20 +1363,20 @@ void EvolutionSearch::run(MIPData &data) const {
                 thrust::raw_pointer_cast(data_device.slacks.data()));
 
     //TODO move this too to device
-    std::vector<double> host_sum_viol (max_solutions,0);
-    for (int solution_index =0; solution_index < max_solutions; ++solution_index) {
+    std::vector<double> host_sum_viol(max_solutions, 0);
+    for (int solution_index = 0; solution_index < max_solutions; ++solution_index) {
         for (int irow = 0; irow < model_host.nrows; ++irow) {
             const int scaled_row = irow + solution_index * model_host.nrows;
             const double slack_row = data_device.slacks[scaled_row];
-            FP_ASSERT(model_host.sense[irow] == 'L' || model_host.sense[irow] == 'E');
 
-        if (irow < model_host.n_equalities)
-        {
-            if (!is_eq_feas(slack_row, 0))
-                 host_sum_viol[solution_index] += fabs(slack_row);
-        } else {
-            if (is_lt_feas(slack_row, 0))
-                 host_sum_viol[solution_index] += fabs(slack_row);
+            // first equalities than inequalities
+            if (irow < model_host.n_equalities) {
+                if (!is_eq_feas(slack_row, 0))
+                    host_sum_viol[solution_index] += fabs(slack_row);
+            } else {
+                if (is_lt_feas(slack_row, 0))
+                    host_sum_viol[solution_index] += fabs(slack_row);
+            }
         }
     }
 
@@ -1428,9 +1425,17 @@ void EvolutionSearch::run(MIPData &data) const {
     };
     consoleLog("]");
 
+    bool is_relaxed_solution_copied = false;
     for (int i_round = 0; i_round < n_rounds; ++i_round)
     {
         args_device.iter = i_round;
+
+        if (!is_relaxed_solution_copied) {
+            if (data.lp_solution_ready) {
+                //TODO round: primals
+                copy_solution_to_device(max_solutions-1, data.primals, data_device, model_device, gpu_model_ptrs);
+            }
+        }
 
         /* Each kernel and block get assigned as this rounds random seed:
          * i_rounds * (MOVES * BLOCKS) + BLOCKS * i_move + i_block
@@ -1563,6 +1568,7 @@ void EvolutionSearch::run(MIPData &data) const {
             consoleLog("[{}-sol] Taking {} move", solution_index , move_name);
             consoleLog("[{}-sol] (idx, move_score: (obj_change, slack_change, score)): {} ({}, {}, {})", solution_index, min_index, score.objective_change, score.violation_change, score.weighted_violation_change);
 
+            //TODO: merge both function
             /* Apply best move. */
             apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index, solution_index);
 
