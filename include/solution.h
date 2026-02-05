@@ -25,5 +25,3 @@ public:
     // equality operator
     bool operator==(const Solution &other) const;
 };
-
-using SolutionPtr = std::shared_ptr<Solution>;

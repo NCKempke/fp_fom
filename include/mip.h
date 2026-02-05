@@ -68,7 +68,7 @@ struct MIPInstance
 MIPInstance extract(MIPModelPtr model);
 
 /* Construction a solution from a span range */
-SolutionPtr makeFromSpan(const MIPInstance &mip, std::span<const double> x, double objval, bool isFeas = true, double violation = 0.0);
+std::unique_ptr<Solution> makeFromSpan(const MIPInstance &mip, std::span<const double> x, double objval, bool isFeas = true, double violation = 0.0);
 
 /* Input the LP relaxation of a given MIPInstance to the solver stored in MIPModelPtr. */
 void pass_lp_to_solver(const MIPInstance& mip, MIPModelPtr model);

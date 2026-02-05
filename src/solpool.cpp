@@ -28,38 +28,20 @@ void SolutionPool::unlock() const
     }
 }
 
-Solution SolutionPool::getSol(int idx) const {
+const Solution& SolutionPool::getSol(int idx) const {
     LockGuard lock(*this);
 
-    if (idx < 0 || idx >= pool.size())
-        return {};
+    FP_ASSERT(0 <= idx && idx < pool.size());
 
     return *pool[idx];
 }
 
-std::vector<Solution> SolutionPool::getSols(int n) const
-{
-    LockGuard lock(*this);
-    FP_ASSERT(n >= -1);
-
-    std::vector<Solution> sols;
-
-    if (n == -1)
-        n = pool.size();
-    else
-        n = std::min(n, static_cast<int>(pool.size()));
-
-    /* Copy and return all solutions. */
-    sols.reserve(n);
-
-    for (int isol = 0; isol < n; ++isol)
-        sols.push_back(*pool[isol]);
-
-    return sols;
-}
-
 bool SolutionPool::has_feas_unsafe() const {
-    return ((!pool.empty()) && pool[0]->isFeas);
+    if (pool.empty())
+        return false;
+
+    const size_t best_sol = solution_rank[0];
+    return pool[best_sol]->isFeas;
 }
 
 bool SolutionPool::hasFeas() const
@@ -82,26 +64,42 @@ int SolutionPool::n_sols() const {
 Solution SolutionPool::getIncumbent() const
 {
     LockGuard lock(*this);
-    return has_feas_unsafe() ? *pool[0] : Solution();
+
+    if (has_feas_unsafe()) {
+        const size_t best_sol = solution_rank[0];
+        return *pool[best_sol];
+    } else  {
+        return Solution();
+    }
 }
 
 double SolutionPool::primalBound() const
 {
     LockGuard lock(*this);
-    return has_feas_unsafe() ? pool[0]->objval : objsense * INFTY;
+    if (has_feas_unsafe()) {
+        const size_t best_sol = solution_rank[0];
+        return pool[best_sol]->objval;
+    } else {
+        return objsense * INFTY;
+    }
 }
 
 double SolutionPool::minViolation() const
 {
     LockGuard lock(*this);
-    FP_ASSERT(!pool.empty());
-    return pool[0]->absViolation;
+
+    if (pool.empty())
+        return INFTY;
+    else {
+        const size_t best_sol = solution_rank[0];
+        return pool[best_sol]->absViolation;
+    }
 }
 
-void SolutionPool::add_unsafe(SolutionPtr sol) {
+void SolutionPool::add_unsafe(std::unique_ptr<Solution> sol) {
     // avoid adding duplicates
     auto end = pool.end();
-    auto compEq = [&](const SolutionPtr &other)
+    auto compEq = [&](const std::unique_ptr<Solution>& other)
     {
         return (*sol) == (*other);
     };
@@ -110,28 +108,30 @@ void SolutionPool::add_unsafe(SolutionPtr sol) {
     if (itr != end)
         return;
 
+    const size_t new_index = pool.size();
+
+    // Find insertion position in rank vector and add new_index
     // feasible solution are kept sorted by objective and infeasible ones by violation
     // feasible solutions always come before infeasible ones
-    auto comp = [&](const SolutionPtr &sol1, const SolutionPtr &sol2)
-    {
-        if (sol1->isFeas == sol2->isFeas)
-        {
-            if (sol1->isFeas)
-                return (objsense * sol1->objval < objsense * sol2->objval);
+    auto comp = [&](size_t i, const std::unique_ptr<Solution>& s) {
+        const auto& existingSol = pool[i];
+
+        if (existingSol->isFeas == s->isFeas) {
+            if (existingSol->isFeas)
+                return (objsense * existingSol->objval < objsense * s->objval);
             else
-                return (sol1->absViolation < sol2->absViolation);
+                return (existingSol->absViolation < s->absViolation);
         }
-        return (sol1->isFeas);
+        return (existingSol->isFeas); // feasible comes before infeasible
     };
 
-    pool.insert(
-        std::upper_bound(pool.begin(), pool.end(), sol, comp),
-        sol);
+    // Find where to insert the new index in the rank vector
+    auto insertPos = std::lower_bound(solution_rank.begin(), solution_rank.end(), sol, comp);
 
-    // 20 solutions should be enough for our purposes
-    // TODO!
-    if (pool.size() > 20)
-        pool.resize(20);
+    if (std::distance(solution_rank.begin(), insertPos) < 10) {
+        solution_rank.insert(insertPos, new_index);
+        pool.push_back(std::move(sol));
+    }
 }
 
 void SolutionPool::merge(SolutionPool &other)
@@ -139,13 +139,13 @@ void SolutionPool::merge(SolutionPool &other)
     LockGuard lock1(*this);
     LockGuard lock2(other);
 
-    for (SolutionPtr sol : other.pool)
-        add_unsafe(sol);
-
+    for (size_t sol = 0; sol < other.pool.size(); ++sol) {
+        add_unsafe(std::move(other.pool[sol]));
+    }
     other.pool.clear();
 }
 
-void SolutionPool::add(SolutionPtr sol)
+void SolutionPool::add(std::unique_ptr<Solution> sol)
 {
     if (!sol)
         return;
@@ -153,12 +153,13 @@ void SolutionPool::add(SolutionPtr sol)
     LockGuard lock(*this);
 
     const bool has_feas = has_feas_unsafe();
+    const double best_obj = has_feas ? pool[solution_rank[0]]->objval : objsense * INFTY;
 
-    if ((has_feas && sol->objval < pool[0]->objval) || (!has_feas && sol->isFeas))
+    if ((has_feas && sol->objval < best_obj) || (!has_feas && sol->isFeas))
         consoleLog("found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}",
                sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, sol->timeFound, sol->foundBy);
 
-    add_unsafe(sol);
+    add_unsafe(std::move(sol));
 }
 
 static double solDistance(std::span<const double> x1, std::span<const double> x2)
@@ -185,11 +186,13 @@ void SolutionPool::print() const
     consoleInfo("Solution pool: {} solutions", pool.size());
     consoleLog("{:>8}{:>15}{:>15}{:>15}{:>7}{:>12}{:>8}  {}", "n", "Objective", "RelViolation", "AbsViolation", "Feas", "L1 dist", "Time", "FoundBy");
 
-    SolutionPtr first = pool[0];
+    const size_t best_idx = solution_rank[0];
+    const auto& best = *pool[best_idx];
     for (int k = 0; k < pool.size(); k++)
     {
-        SolutionPtr sol = pool[k];
+        const int ith_sol = solution_rank[k];
+        const auto& sol = *pool[ith_sol];
         consoleLog("{:>8}{:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>12.2f}{:>8.2f}  {}",
-                   k, sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, solDistance(first->x, sol->x), sol->timeFound, sol->foundBy);
+                   k, sol.objval, sol.relViolation, sol.absViolation, sol.isFeas, solDistance(best.x, sol.x), sol.timeFound, sol.foundBy);
     }
 }

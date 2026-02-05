@@ -9,12 +9,18 @@
 
 /* Stores a pool of MIP solutions (feasible or not).
  *
- * If not empty, the first solution is always the best one
+ * Addresses to solutions stored in this pool stay valid throughout their lifetime. The pool stores newly found solutions in consecutive order.
+ *
+ * In addition, the pool maintains a solution order:
+ *  - feasible first, good to bad obj
+ *  - infeasible second, low to high violation
  */
 class SolutionPool
 {
 protected:
-    std::vector<SolutionPtr> pool;
+    /* Vector containing the sorted solution indices. */
+    std::vector<size_t> solution_rank;
+    std::vector<std::unique_ptr<Solution>> pool;
 
     double objsense;
     int ncols;
@@ -25,13 +31,10 @@ public:
     SolutionPool() = delete;
     SolutionPool(int ncols_, double objsense_ /** 1.0 == MIN; -1.0 == MAX */, bool thread_safe);
 
-    void add(SolutionPtr sol);
+    void add(std::unique_ptr<Solution> sol);
 
-    /* Return a copy if the solution at index n. */
-    Solution getSol(int idx) const;
-
-    /* Return a copy of the best n solutions. If n == -1; returns all solutions. */
-    std::vector<Solution> getSols(int n) const;
+    /* Return a const reference to the solution at index n. The index must be valid! */
+    const Solution& getSol(int idx) const;
 
     /* Return whether pool has feasible solutions. */
     bool hasFeas() const;
@@ -51,7 +54,7 @@ public:
     /* Return minimum violation of all solutions stored. */
     double minViolation() const;
 
-    /* Merge this pool with another solution pool. */
+    /* Merge this pool with another solution pool. This clears other. */
     void merge(SolutionPool &other);
 
     /* Print solution pool info. */
@@ -65,7 +68,7 @@ private:
     bool has_feas_unsafe() const;
 
     /* Add solution to pool without locking mutex. */
-    void add_unsafe(SolutionPtr sol);
+    void add_unsafe(std::unique_ptr<Solution> sol);
 
     struct LockGuard {
         const SolutionPool& pool;

@@ -249,11 +249,11 @@ void dfsSearch(const MIPData& data, PropagationEngine& engine, SolutionPool& poo
 			std::vector<double> x{domain.lbs().begin(), domain.lbs().end()};
 			double objval = evalObj(mip, x);
 			bool isFeas = isSolFeasible(mip, x);
-			SolutionPtr sol = makeFromSpan(mip, x, objval, isFeas, engine.violation());
-			sol->timeFound = gStopWatch().elapsed();
-			sol->foundBy = strat_name;
+			auto sol_ptr = makeFromSpan(mip, x, objval, isFeas, engine.violation());
+			sol_ptr->timeFound = gStopWatch().elapsed();
+			sol_ptr->foundBy = strat_name;
 
-			pool.add(sol);
+			pool.add(std::move(sol_ptr));
 			if (isFeas)
 				numSolutions++;
 		}
@@ -366,12 +366,12 @@ static void runDFS(const MIPData& data, PropagationEngine& engine, SolutionPool&
 			std::vector<double> x{domain.lbs().begin(), domain.lbs().end()};
 			double objval = evalObj(mip, x);
 			bool isFeas = isSolFeasible(mip, x);
-			SolutionPtr solPtr = makeFromSpan(mip, x, objval, isFeas, newViol);
+			auto sol_ptr = makeFromSpan(mip, x, objval, isFeas, newViol);
 
-			solPtr->timeFound = gStopWatch().elapsed();
+			sol_ptr->timeFound = gStopWatch().elapsed();
 			const std::string strat_name = fmt::format("{}_{}", toString(params.ranker), toString(params.valueChooser));
-			solPtr->foundBy = strat_name;
-			pool.add(solPtr);
+			sol_ptr->foundBy = strat_name;
+			pool.add(std::move(sol_ptr));
 		}
 	}
 
