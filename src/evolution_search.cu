@@ -40,7 +40,7 @@ constexpr int N_MOVES_PER_SINGLE_COL_BLOCK = N_MOVES_PER_WARP * N_WARPS_PER_BLOC
 constexpr int BLOCKSIZE_VECTOR_KERNEL = 1024; /* Blocksize used for vector kernels (each thread operating on one vector element). */
 
 constexpr int AVAILABLE_MOVES = 6;
-constexpr int UPDATE_FREQUENCE = 100;
+constexpr int UPDATE_FREQUENCE = 10000;
 
 constexpr double MAX_VALUE_FOR_HUGE_BOUNDS = 1000;
 
@@ -1286,9 +1286,11 @@ void update_references_for_solution_index(const int solution_index, TabuSearchDa
         model.objective.begin(),
         0.0);
     if (reset) {
-        thrust::fill(data_device.tabu.begin(), data_device.tabu.end(), -tabu_tenure);
-        thrust::fill(data_device.constraint_weights.begin(), data_device.constraint_weights.end(), 1);
-        thrust::fill(data_device.objective_weight.begin(), data_device.objective_weight.end(), 1);
+        thrust::fill(data_device.tabu.begin() + solution_index * model.ncols,
+                     data_device.tabu.end() + (solution_index + 1) * model.ncols, -tabu_tenure);
+        thrust::fill(data_device.constraint_weights.begin() + solution_index + model.nrows, data_device.constraint_weights.begin() + (solution_index+1) * model.nrows, 1);
+        thrust::fill(data_device.objective_weight.begin() + solution_index * model.ncols,
+                     data_device.objective_weight.begin() + (solution_index + 1) * model.ncols, 1);
         consoleLog("Initial slack {} \t initial objective {}\t for solution at pos {}",
                    data_device.sum_viol[solution_index], data_device.objective[solution_index], solution_index);
     }
