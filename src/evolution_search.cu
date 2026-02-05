@@ -1192,6 +1192,46 @@ std::tuple<std::array<int, AVAILABLE_MOVES>, std::array<move_config, AVAILABLE_M
     return {blocks_per_move, config_per_move, n_blocks_total};
 }
 
+void recompute_solution_metrics(TabuSearchDataDevice& data_device, TabuSearchKernelArgs& args_device, const GpuModelPtrs& gpu_model_ptrs, const GpuModel& model_device, const int n_equalities, int tabu_tenure, bool reset = false) {
+
+    /* calculate slack */
+    thrust::copy(model_device.rhs.begin(), model_device.rhs.end(), data_device.slacks.begin());
+    csr_spmv_kernel<<<512, 1024>>>(model_device.nrows, gpu_model_ptrs, thrust::raw_pointer_cast(data_device.sol.data()), -1.0,
+                thrust::raw_pointer_cast(data_device.slacks.data()));
+
+    /* calculate violations for equations*/
+    double sum_viol = thrust::transform_reduce(
+        thrust::device,
+        data_device.slacks.begin(),
+        data_device.slacks.begin() + n_equalities,
+        [] __device__ (const double x) -> double {
+            return !is_eq_feas(x, 0) ? fabs(x) : 0.0;
+        },
+        0.0,
+        thrust::plus<double>()
+    );
+
+    /* calculate violations for ineq*/
+    args_device.sum_viol = thrust::transform_reduce(
+        thrust::device,
+        data_device.slacks.begin() + n_equalities,
+        data_device.slacks.end(),
+        [] __device__ (const double x) -> double {
+            return is_lt_feas(x, 0) ? fabs(x) : 0.0;
+        },
+        sum_viol,
+        thrust::plus<double>()
+    );
+    /* update objective */
+    args_device.objective = thrust_dot_product(data_device.sol, model_device.objective);
+    /* if necessary reset weights and tabu list*/
+    if (reset) {
+        thrust::fill(data_device.tabu.begin(), data_device.tabu.end(), -tabu_tenure);
+        thrust::fill(data_device.constraint_weights.begin(), data_device.constraint_weights.end(), 1);
+        thrust::fill(data_device.objective_weight.begin(), data_device.objective_weight.end(), 1);
+    }
+}
+
 void EvolutionSearch::run()
 {
     int seed = 0;
@@ -1233,35 +1273,7 @@ void EvolutionSearch::run()
 
     TabuSearchKernelArgs args_device(data_device, model_host, tabu_tenure);
 
-    // calculate slack and sum_viol
-    thrust::copy(model_device.rhs.begin(), model_device.rhs.end(), data_device.slacks.begin());
-    csr_spmv_kernel<<<512, 1024>>>(model_device.nrows, gpu_model_ptrs, thrust::raw_pointer_cast(data_device.sol.data()), -1.0,
-                thrust::raw_pointer_cast(data_device.slacks.data()));
-
-    // equalities
-    double sum_viol = thrust::transform_reduce(
-        thrust::device,
-        data_device.slacks.begin(),
-        data_device.slacks.begin() + model_host.n_equalities,
-        [] __device__ (const double x) -> double {
-            return !is_eq_feas(x, 0) ? fabs(x) : 0.0;
-        },
-        0.0,
-        thrust::plus<double>()
-    );
-
-    // inequalities
-    args_device.sum_viol = thrust::transform_reduce(
-        thrust::device,
-        data_device.slacks.begin() + model_host.n_equalities,
-        data_device.slacks.end(),
-        [] __device__ (const double x) -> double {
-            return is_lt_feas(x, 0) ? fabs(x) : 0.0;
-        },
-        sum_viol,
-        thrust::plus<double>()
-    );
-    args_device.objective = thrust_dot_product(data_device.sol, model_device.objective);
+    recompute_solution_metrics(data_device, args_device, gpu_model_ptrs, model_device, tabu_tenure, model_host.n_equalities);
 
     consoleInfo("Starting evolution search on GPU");
 
