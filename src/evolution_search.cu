@@ -30,6 +30,8 @@
  * blocks.
  */
 constexpr int BLOCKSIZE_MOVE = 256;
+constexpr int SOLUTION_TRANSFER_FREQ = 1000;
+constexpr int RECOMPUTE_SOL_METRICS_FREQ = SOLUTION_TRANSFER_FREQ / 10;
 
 constexpr int N_WARPS_PER_BLOCK = BLOCKSIZE_MOVE / WARP_SIZE;
 static_assert(BLOCKSIZE_MOVE % WARP_SIZE == 0);
@@ -1441,8 +1443,14 @@ void EvolutionSearch::run()
 
         consoleLog("(objective, sum_viol): {} {}", args_device.objective, args_device.sum_viol);
 
+        if (i_round > 0 && i_round % RECOMPUTE_SOL_METRICS_FREQ == 0) {
+            recompute_solution_metrics(data_device, args_device, gpu_model_ptrs, model_device, tabu_tenure, model_host.n_equalities);
+        }
+
         // TODO: make 100 a #define
-        if (i_round > 0 && i_round % 100 == 0) {
+        if (i_round > 0 && i_round % SOLUTION_TRANSFER_FREQ == 0) {
+            // ensure that the solution metrics are updated
+            assert(RECOMPUTE_SOL_METRICS_FREQ % SOLUTION_TRANSFER_FREQ == 0);
             /* TODO: Check whether our partial solution's objective is good enough to be stored in the partial solutions pool. */
             thrust::host_vector<double> sol_host = data_device.sol; /* Copy back solution. */
 
@@ -1458,9 +1466,6 @@ void EvolutionSearch::run()
         }
 
 #ifdef EXTENDED_DEBUG
-        auto inner_product = thrust::inner_product( data_device.sol.begin(),
-                                 data_device.sol.end(),
-                                 model_device.objective.begin(),0.0);
         assert(is_eq_feas(thrust::inner_product( data_device.sol.begin(),
             data_device.sol.end(),
             model_device.objective.begin(),0.0), args_device.objective));
