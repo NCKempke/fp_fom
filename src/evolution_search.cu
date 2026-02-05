@@ -387,6 +387,7 @@ __device__ move_score compute_score_single_col_move_warp(const GpuModelPtrs &mod
         if (feas_before && !feas_after) {
             /* Bad move. Increases score. */
             weighted_viol_change_thread += (1.0 + is_eq) * weight;
+
         } else if (!feas_before && feas_after) {
             weighted_viol_change_thread -= (1.0 + is_eq) * weight;
         } else if (!feas_before && !feas_after && viol_new < viol_old) {
@@ -1293,7 +1294,26 @@ void EvolutionSearch::run()
 
     TabuSearchKernelArgs args_device(data_device, model_host, tabu_tenure);
 
-    recompute_solution_metrics(data_device, args_device, gpu_model_ptrs, model_device, tabu_tenure, model_host.n_equalities);
+    recompute_solution_metrics(data_device, args_device, gpu_model_ptrs, model_device, model_host.n_equalities, tabu_tenure);
+#define EXTENDED_DEBUG
+
+// #ifdef EXTENDED_DEBUG
+//     double sum_viol = 0.0;
+//     for (int irow = 0; irow < model_host.nrows; ++irow)
+//     {
+//         const double slack_row = data_device.slacks[irow];
+//
+//         if (irow < model_host.n_equalities)
+//         {
+//             if (!is_eq_feas(slack_row, 0))
+//                 sum_viol += fabs(slack_row);
+//         } else {
+//             if (is_lt_feas(slack_row, 0))
+//                 sum_viol += fabs(slack_row);
+//         }
+//     }
+//     assert(sum_viol == args_device.sum_viol);
+// #endif
 
     consoleInfo("Starting evolution search on GPU");
 
@@ -1328,7 +1348,6 @@ void EvolutionSearch::run()
 
         recompute_solution_violation_metrics(data_device, args_device);
 
-#define EXTENDED_DEBUG
 #ifdef EXTENDED_DEBUG
         if (args_device.n_violated == 0) {
             consoleInfo("Found feasible!");
@@ -1444,7 +1463,7 @@ void EvolutionSearch::run()
         consoleLog("(objective, sum_viol): {} {}", args_device.objective, args_device.sum_viol);
 
         if (i_round > 0 && i_round % RECOMPUTE_SOL_METRICS_FREQ == 0) {
-            recompute_solution_metrics(data_device, args_device, gpu_model_ptrs, model_device, tabu_tenure, model_host.n_equalities);
+            recompute_solution_metrics(data_device, args_device, gpu_model_ptrs, model_device, model_host.n_equalities, tabu_tenure);
         }
 
         // TODO: make 100 a #define
