@@ -103,6 +103,7 @@ set_target_properties(mipcomp_main PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 target_compile_options(mipcomp_main PRIVATE
   $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:RelWithDebInfo>>:-lineinfo>
   $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-G;-g>
+  -Wno-shadow -Wall
 )
 
 target_compile_options(mipcomp_main PRIVATE
