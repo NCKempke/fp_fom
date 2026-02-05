@@ -1413,5 +1413,21 @@ void EvolutionSearch::run()
         args_device.sum_viol += score.violation_change;
 
         consoleLog("(objective, sum_viol): {} {}", args_device.objective, args_device.sum_viol);
+
+        // TODO: make 100 a #define
+        if (i_round > 0 && i_round % 100 == 0) {
+            /* TODO: Check whether our partial solution's objective is good enough to be stored in the partial solutions pool. */
+            thrust::host_vector<double> sol_host = data_device.sol; /* Copy back solution. */
+
+            consoleInfo("Moving solution to partial pool");
+            auto sol = std::make_unique<Solution>();
+            sol->x.insert(sol->x.end(), sol_host.begin(), sol_host.end());
+            sol->objval = args_device.objective; // TODO recompute
+            sol->isFeas = false; // TODO only a hack
+            sol->absViolation = args_device.sum_viol; // TODO only a hack
+            sol->relViolation = sol->absViolation / model_host.maxRhs;
+
+            partials.add(std::move(sol));
+        }
     }
 };
