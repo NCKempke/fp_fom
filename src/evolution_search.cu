@@ -565,7 +565,7 @@ template <const bool GREEDY>
 __device__ void compute_oneopt_move(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, const int col, move_score &best_score, single_col_move &best_move, const int solution_index)
 {
     const int thread_idx_warp = threadIdx.x % WARP_SIZE;
-    assert(col < args.ncols);
+    assert(0 <= col && col < args.ncols);
 
     const int scaled_col = col + solution_index * args.ncols;
 
