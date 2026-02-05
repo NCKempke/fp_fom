@@ -1288,7 +1288,7 @@ void update_references_for_solution_index(const int solution_index, TabuSearchDa
     if (reset) {
         thrust::fill(data_device.tabu.begin() + solution_index * model.ncols,
                      data_device.tabu.end() + (solution_index + 1) * model.ncols, -tabu_tenure);
-        thrust::fill(data_device.constraint_weights.begin() + solution_index + model.nrows, data_device.constraint_weights.begin() + (solution_index+1) * model.nrows, 1);
+        thrust::fill(data_device.constraint_weights.begin() + solution_index * model.nrows, data_device.constraint_weights.begin() + (solution_index+1) * model.nrows, 1);
         thrust::fill(data_device.objective_weight.begin() + solution_index * model.ncols,
                      data_device.objective_weight.begin() + (solution_index + 1) * model.ncols, 1);
         consoleLog("Initial slack {} \t initial objective {}\t for solution at pos {}",
