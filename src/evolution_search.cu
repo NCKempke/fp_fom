@@ -382,7 +382,7 @@ __device__ move_score compute_score_single_col_move_warp(const GpuModelPtrs &mod
     {
         const double coef = model.row_val_trans[inz];
         const int row_idx = model.col_idx_trans[inz];
-        const int scaled_row_idx = model.col_idx_trans[inz] + row_idx * solution_index;
+        const int scaled_row_idx = row_idx + args.nrows * solution_index;
         const double weight = args.constraint_weights[scaled_row_idx];
 
         /* We have <= and = only. */
@@ -1355,7 +1355,7 @@ void EvolutionSearch::run(MIPData &data) const {
         cuda::minimum<double>()
     );
 
-    update_references_for_solution_index(0, data_device, model_host, gpu_model_ptrs, tabu_tenure);
+    update_references_for_solution_index(0, data_device, model_device, gpu_model_ptrs, tabu_tenure);
     activate_solutions[0] = true;
 
 
@@ -1367,7 +1367,7 @@ void EvolutionSearch::run(MIPData &data) const {
         data_device.sol.begin()+ model_host.ncols,
         cuda::maximum<double>()
     );
-    update_references_for_solution_index(1, data_device, model_host, gpu_model_ptrs, tabu_tenure);
+    update_references_for_solution_index(1, data_device, model_device, gpu_model_ptrs, tabu_tenure);
     activate_solutions[1] = true;
 
     std::vector<double> sol_host(model_host.ncols);
@@ -1381,7 +1381,7 @@ void EvolutionSearch::run(MIPData &data) const {
         data_device.sol.begin() + model_host.ncols * 2,
         cuda::minimum<double>()
     );
-    update_references_for_solution_index(2, data_device, model_host, gpu_model_ptrs, tabu_tenure);
+    update_references_for_solution_index(2, data_device, model_device, gpu_model_ptrs, tabu_tenure);
     activate_solutions[2] = true;
 
 
