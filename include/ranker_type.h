@@ -29,6 +29,7 @@ enum class RankerType
     FRAC_BREAK_DUALS,
     FRAC_BREAK_REDCOSTS,
     REDCOSTS_BREAK_FRAC,
+    ROW_VIOLATION,
     UNKNOWN,
 };
 

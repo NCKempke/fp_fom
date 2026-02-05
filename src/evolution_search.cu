@@ -169,10 +169,11 @@ int blocks_for_samples(int n_samples_for_type) {
  * - one_opt (greedy) : push variable in direction of its objective
  * - flip             : flips a binary randomly selected variable
  * - random           : selects a random variable and assigns it a random value
- * TODO:
- * - mtm_satisfied    : select a random satisfied constraint and set slack to zero
+ * - mtm_satisfied    : select a random satisfied constraint and set slack to zero; iterates all variables
+ *                      of the constraint to find the best candidate
  * - mtm_unsatisfied  : selects a random violated constraint, then selects a variable within its range
- *                      and adjusts it to make the constraint as feasible as possible
+ *                      to make the constraint as feasible as possible; iterates all variables of the
+ *                      constraint to find the best candidate
  *
  * TODO:
  * - swap             : select two (binary) variables with different values and swap them

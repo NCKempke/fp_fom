@@ -95,6 +95,66 @@ using ValuePtr = std::shared_ptr<ValueChooser>;
 
 /************* Rankers *************/
 
+/* Given an infeasible integer assignment, put variables from violated rows first. */
+class RowViolation : public Ranker
+{
+public:
+	virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) override
+	{
+		FP_ASSERT(data.mip.ncols == (data.nBinaries + data.nIntegers + data.nContinuous));
+
+		std::vector<double> sol;
+		std::vector<bool> marked(data.mip.ncols - data.nContinuous, false);
+		std::vector<int> discrete_vars(marked.size());
+
+		int pos = 0;
+		const auto &matrix = data.mip.rows;
+		const auto &rowBeg = matrix.beg;
+		const auto &rowInd = matrix.ind;
+		const auto &rowVal = matrix.val;
+
+		/* Iterate each row. If it is infeasible given the reference, put its variables. Put variables from infeasible rows later. */
+		for (int irow = 0; irow < data.mip.nrows; ++irow) {
+			double slack = data.mip.rhs[irow];
+			const char rowsense = data.mip.sense[irow];
+
+            for (int inz = rowBeg[irow]; inz < rowBeg[irow + 1]; ++inz)
+            {
+                int jcol = rowInd[inz];
+				double val = rowVal[inz];
+
+				slack -= sol[jcol] * val;
+            }
+
+			if ((rowsense == 'E' && equal(slack, 0.0, ABS_FEASTOL)) || (rowsense == 'L' && lessEqualThan(0.0, slack, ABS_FEASTOL))
+				|| (rowsense == 'G' && lessEqualThan(slack, 0.0, ABS_FEASTOL)))
+				continue;
+
+            for (int inz = rowBeg[irow]; inz < rowBeg[irow + 1]; ++inz)
+            {
+                int jcol = rowInd[inz];
+                if (data.mip.xtype[jcol] == 'C' || marked[jcol])
+                    continue;
+
+                marked[jcol] = true;
+                discrete_vars[pos] = jcol;
+				++pos;
+            }
+		}
+
+		/* Add the remaining variables. */
+		for (int jcol = 0; jcol < data.mip.ncols; ++jcol) {
+			if (data.mip.xtype[jcol] == 'C' || marked[jcol])
+				continue;
+			discrete_vars[pos] = jcol;
+			++pos;
+		}
+
+		FP_ASSERT(pos == static_cast<int>(discrete_vars.size()));
+		return discrete_vars;
+	}
+};
+
 /** Take integers and binaries as is from the problem. */
 class LR : public Ranker
 {
@@ -1087,6 +1147,8 @@ RankerPtr makeRanker(RankerType ranker, const Params &params, const MIPData &dat
 		return RankerPtr{new FracWithRedCostTieBreaker()};
 	case RankerType::REDCOSTS_BREAK_FRAC:
 		return RankerPtr{new RedCostWithFracTieBreaker(params.seed)};
+	case RankerType::ROW_VIOLATION:
+		return RankerPtr{new RowViolation()};
 	default:
 	case RankerType::UNKNOWN:
 		FP_ASSERT(false);
