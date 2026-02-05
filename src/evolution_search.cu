@@ -1415,36 +1415,37 @@ void EvolutionSearch::run(MIPData &data) const {
         if (!is_relaxed_solution_copied) {
             if (data.lp_solution_ready) {
                 int cont_variables_begin = model_host.n_binaries + model_host.n_integers;
-//TODO: make a test if copy and then transform is faster than than a transform from the cpu
-                thrust::transform(
+                //TODO: make a test if copy and then transform is faster than than a transform from the cpu
+                thrust::copy(
                     data.primals.begin(),
-                    data.primals.begin() + cont_variables_begin,
-                    data_device.sol.begin() + model_device.ncols * 3,
+                    data.primals.end(),
+                    data_device.sol.begin() + model_device.ncols * 3
+                );
+                thrust::transform(
+                    data_device.sol.begin() + 3 * model_device.ncols,
+                    data_device.sol.begin() + 3 * model_device.ncols + cont_variables_begin,
+                    data_device.sol.begin() + 3 * model_device.ncols,
                     [] __host__ __device__ (double x) {
                         return floor(x);
                     }
                 );
-                thrust::copy(
-                    data.primals.begin() + cont_variables_begin,
-                    data.primals.end(),
-                    data_device.sol.begin() + model_device.ncols * 3 + cont_variables_begin
-                );
+
                 update_references_for_solution_index(3, data_device, model_device,
                                                      gpu_model_ptrs, tabu_tenure);
                 activate_solutions[3] = true;
 
-                thrust::transform(
+                thrust::copy(
                     data.primals.begin(),
-                    data.primals.begin() + cont_variables_begin,
-                    data_device.sol.begin() + model_device.ncols * 4,
+                    data.primals.end(),
+                    data_device.sol.begin() + model_device.ncols * 4
+                );
+                thrust::transform(
+                    data_device.sol.begin() + 4 * model_device.ncols,
+                    data_device.sol.begin() + 4 * model_device.ncols + cont_variables_begin,
+                    data_device.sol.begin() + 4 * model_device.ncols,
                     [] __host__ __device__ (double x) {
                         return ceil(x);
                     }
-                );
-                thrust::copy(
-                    data.primals.begin() + cont_variables_begin,
-                    data.primals.end(),
-                    data_device.sol.begin() + model_device.ncols * 4 + cont_variables_begin
                 );
                 update_references_for_solution_index(4, data_device, model_device,
                                                      gpu_model_ptrs, tabu_tenure);
