@@ -1289,8 +1289,7 @@ void update_references_for_solution_index(const int solution_index, TabuSearchDa
         thrust::fill(data_device.tabu.begin() + solution_index * model.ncols,
                      data_device.tabu.begin() + (solution_index + 1) * model.ncols, -tabu_tenure);
         thrust::fill(data_device.constraint_weights.begin() + solution_index * model.nrows, data_device.constraint_weights.begin() + (solution_index+1) * model.nrows, 1);
-        thrust::fill(data_device.objective_weight.begin() + solution_index * model.ncols,
-                     data_device.objective_weight.begin() + (solution_index + 1) * model.ncols, 1);
+        data_device.objective_weight[solution_index] = 1;
         consoleLog("Initial slack {} \t initial objective {}\t for solution at pos {}",
                    data_device.sum_viol[solution_index], data_device.objective[solution_index], solution_index);
     }
@@ -1597,7 +1596,9 @@ void EvolutionSearch::run(MIPData &data) const {
 
             consoleLog("[{}-sol] (objective change, sum_viol change): {} {}", solution_index, score.objective_change, score.violation_change);
             consoleLog("[{}-sol] (objective, sum_viol): {}  {}", solution_index, new_objective, new_violation);
-
+            double val = thrust::inner_product( data_device.sol.begin() + solution_index * model_host.ncols,
+                    data_device.sol.begin() + (solution_index + 1) * model_host.ncols,
+                    model_device.objective.begin(),0.0);
             assert(is_eq_feas(thrust::inner_product( data_device.sol.begin() + solution_index * model_host.ncols,
                     data_device.sol.begin() + (solution_index + 1) * model_host.ncols,
                     model_device.objective.begin(),0.0), new_objective));
