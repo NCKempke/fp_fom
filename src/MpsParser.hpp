@@ -78,7 +78,6 @@ public:
         mip.ncols = parser.nCols;
         mip.nrows = parser.nrows;
 
-        // get obj
         /* Potentially transform the objective. */
         if (parser.is_objective_negated) {
             /* The MPS file contains a MAX objective; negate the objective. */
@@ -88,28 +87,141 @@ public:
             parser.is_objective_negated = false;
         }
 
+        /* Apply >= to <= transformation FIRST (before row permutation). This needs to happen on the original row data */
+        /* Negate all row coefficients */
+        for (auto& entry : parser.entries) {
+            int row = std::get<1>(entry);
+
+            if (parser.sense[row] == 'G') {
+                std::get<2>(entry) = -std::get<2>(entry);  /* Negate row coefficient */
+            }
+        }
+
+        /* Change the row types. */
+        for (int row = 0; row < mip.nrows; row++) {
+            if (parser.sense[row] == 'G') {
+                /* Negate the RHS */
+                parser.rowrhs[row] = -parser.rowrhs[row];
+                /* Change sense */
+                parser.sense[row] = 'L';
+            }
+        }
+
+        /* Get columns permutation by type, binaries first, then integers, then continuous columns. */
+        std::vector<int> new_to_old_col(mip.ncols); /* Given the new index i, i's old position, e.g. the index of the column that was moved there. */
+        std::vector<int> old_to_new_col(mip.ncols); /* Given the old index i, i's new position. */
+
+        std::iota(new_to_old_col.begin(), new_to_old_col.end(), 0);
+        std::sort(new_to_old_col.begin(), new_to_old_col.end(), [&](int i, int j) {
+            char type_i = parser.col_type[i];
+            char type_j = parser.col_type[j];
+
+            // Define priority values
+            auto get_priority = [](char type) {
+                if (type == 'B') return 0;  // Highest priority
+                if (type == 'I') return 1;  // Middle priority
+                if (type == 'C') return 2;  // Lowest priority
+                assert(false);
+                return 3; // For any other type (shouldn't happen)
+            };
+
+            return get_priority(type_i) < get_priority(type_j);
+        });
+
+        /* Inverse column permutation. */
+        for (int new_idx = 0; new_idx < mip.ncols; new_idx++) {
+            old_to_new_col[new_to_old_col[new_idx]] = new_idx;
+        }
+
+        /* Determine the row permutation (equalities first). */
+        std::vector<int> new_to_old_row(mip.nrows);
+        std::vector<int> old_to_new_row(mip.nrows);
+        std::iota(new_to_old_row.begin(), new_to_old_row.end(), 0);
+
+        /* Sort indices: equalities first (true < false) */
+        std::sort(new_to_old_row.begin(), new_to_old_row.end(), [&parser](int i, int j) {
+            return parser.sense[i] == 'E' && parser.sense[j] != 'E';
+        });
+
+        /* Inverse row permutation. */
+        for (int new_idx = 0; new_idx < mip.nrows; new_idx++) {
+            old_to_new_row[new_to_old_row[new_idx]] = new_idx;
+        }
+
+        /* Permute COO matrix entries in-place using the permutations. */
+        for (auto& entry : parser.entries) {
+            int old_col = std::get<0>(entry);
+            int old_row = std::get<1>(entry);
+            std::get<0>(entry) = old_to_new_col[old_col];
+            std::get<1>(entry) = old_to_new_row[old_row];
+        }
+
+        /* Now sort entries by column then row for CSR format. */
+        std::sort(parser.entries.begin(), parser.entries.end(),
+                 [](const auto& a, const auto& b) {
+            if (std::get<0>(a) != std::get<0>(b))
+                return std::get<0>(a) < std::get<0>(b);
+            return std::get<1>(a) < std::get<1>(b);
+        });
+
+        /* Finally, copy data. */
         mip.objSense = 1;
         mip.objOffset = parser.objoffset;
+
         mip.obj.resize(mip.ncols, 0);
-        for (auto coeffobj : parser.coeffobj)
-            mip.obj[coeffobj.first] = coeffobj.second;
+        mip.ub.resize(mip.ncols);
+        mip.lb.resize(mip.ncols);
+        mip.xtype.resize(mip.ncols);
+        mip.cNames.resize(mip.ncols);
 
-        // get col data
-        mip.ub = std::move(parser.ub4cols);
-        mip.lb = std::move(parser.lb4cols);
-        mip.is_integer = std::move(parser.is_col_integer);
-        mip.xtype = std::move(parser.col_type);
+        mip.n_binaries = std::count_if(parser.col_type.begin(), parser.col_type.end(), [] (const char c) {
+            return c == 'B';
+        });
+        mip.n_integers = std::count_if(parser.col_type.begin(), parser.col_type.end(), [] (const char c) {
+            return c == 'I';
+        });
 
-        // get row data
-        mip.is_equality = std::move(parser.is_equation);
-        mip.sense = std::move(parser.sense);
-        mip.rhs = std::move(parser.rowrhs);
+        /* Copy the sorted column data. Count binaries and integers while doing so. */
+        for (int new_idx = 0; new_idx < mip.ncols; new_idx++) {
+            int old_idx = new_to_old_col[new_idx];
+            mip.ub[new_idx] = parser.ub4cols[old_idx];
+            mip.lb[new_idx] = parser.lb4cols[old_idx];
+            mip.xtype[new_idx] = parser.col_type[old_idx];
+            mip.cNames[new_idx] = std::move(parser.colnames[old_idx]);
+        }
 
-        /* Initialize the problem's column matrix. While doing so, check whether a column's associated row is a >= row. If so, negate that column's entry. After initializing the column matrix, we change all rows from >= to <= and also negate their right hand side. */
+        /* Fill objective (needs special handling due to sparse storage) */
+        for (auto coeffobj : parser.coeffobj) {
+            int old_idx = coeffobj.first;
+            int new_idx = old_to_new_col[old_idx];
+            mip.obj[new_idx] = coeffobj.second;
+        }
+
+        /* Copy row data */
+        mip.sense.resize(mip.nrows);
+        mip.rhs.resize(mip.nrows);
+        mip.rNames.resize(mip.nrows);
+
+        mip.n_equalities = std::count_if(parser.sense.begin(), parser.sense.end(), [] (const char c) {
+            assert (c == 'L' || c == 'E');
+            return c == 'E';
+        });
+
+        mip.maxRhs = *std::max_element(parser.rowrhs.begin(), parser.rowrhs.end(), [] (const double& rhs1, const double& rhs2) {
+            return std::abs(rhs1) < std::abs(rhs2);
+        });
+
+
+        for (int new_idx = 0; new_idx < mip.nrows; new_idx++) {
+            int old_idx = new_to_old_row[new_idx];
+            mip.sense[new_idx] = parser.sense[old_idx];
+            mip.rhs[new_idx] = parser.rowrhs[old_idx];
+            mip.rNames[new_idx] = std::move(parser.rownames[old_idx]);
+        }
+
+        /* Initialize the problem's column matrix. */
         SparseMatrix matrix{};
         matrix.beg.resize(mip.ncols + 1);
-        matrix.k = mip.ncols;
-
         matrix.nnz = parser.entries.size();
         matrix.ind.resize(matrix.nnz);
         matrix.val.resize(matrix.nnz);
@@ -127,13 +239,8 @@ public:
 
         mip.cols = std::move(matrix);
         mip.rows = mip.cols.transpose();
-        mip.rNames = std::move(parser.rownames);
-        mip.cNames = std::move(parser.colnames);
 
-        for (const auto &rhs: mip.rhs)
-            mip.maxRhs = std::max(std::abs(rhs), mip.maxRhs);
-
-
+        mip.map_orig_to_new_col = std::move(old_to_new_col);
 // #define PRINT_PROBLEM
 
 #ifdef PRINT_PROBLEM
@@ -142,7 +249,7 @@ public:
                 std::cout << mip.obj[j] << " " << mip.cNames[j] << " + ";
         std::cout<< std::endl;
         for (int i = 0; i < mip.ncols; i++) {
-            const auto type = mip.is_integer[i] ? "integer" : "continuous";
+            const auto type = (mip.xtype[i] == 'C' ? "continuous" : (mip.xtype[i] == "I" ? "integer" : "binary"));
             std::cout << mip.cNames[i] << " " << mip.lb[i] << " " << mip.ub[i] << " " << type << std::endl;
         }
         for (int i = 0; i < mip.nrows; i++) {
@@ -150,7 +257,7 @@ public:
             for (int j = mip.rows.beg[i]; j < mip.rows.beg[i + 1]; j++) {
                 std::cout << mip.rows.val[j] << " " << mip.cNames[mip.rows.ind[j]] << " + ";
             }
-            auto sign = mip.is_equality[i] ? " =" : "<=";
+            auto sign = mip.sense[i] == 'E' ? " =" : "<=";
             std::cout << sign << " " << mip.rhs[i] << std::endl;
         }
 #endif
@@ -214,8 +321,6 @@ private:
     std::vector<double> lb4cols;
     std::vector<double> ub4cols;
     std::vector<char> sense;
-    std::vector<bool> is_equation;
-    std::vector<bool> is_col_integer;
     std::vector<char> col_type;
 
     double objoffset = 0;
@@ -362,15 +467,12 @@ MpsParser::parseRows(boost::iostreams::filtering_istream &file) {
         if (word_ref.front() == 'G') {
             rowrhs.push_back(0);
             sense.push_back('G');
-            is_equation.emplace_back(false);
         } else if (word_ref.front() == 'E') {
             rowrhs.push_back(0);
             sense.push_back('E');
-            is_equation.emplace_back(true);
         } else if (word_ref.front() == 'L') {
             rowrhs.push_back(0);
             sense.push_back('L');
-            is_equation.emplace_back(false);
         }
         // todo properly treat multiple free rows
         else if (word_ref.front() == 'N') {
@@ -499,10 +601,6 @@ MpsParser::parseCols(boost::iostreams::filtering_istream &file) {
                 return kFail;
             }
 
-            assert(lb4cols.size() == is_col_integer.size());
-
-            is_col_integer.emplace_back(integral_cols);
-
             // initialize with default bounds; initialize integral cols with 'I'; we later change that to 'B' when adding bounds
             if (integral_cols) {
                 lb4cols.push_back(-INF);
@@ -513,8 +611,6 @@ MpsParser::parseCols(boost::iostreams::filtering_istream &file) {
                 ub4cols.push_back(INF);
                 col_type.emplace_back('C');
             }
-
-            assert(is_col_integer.size() == lb4cols.size());
 
             if (ncols > 1)
                 pdqsort(entries.begin() + colstart, entries.end(),
@@ -794,7 +890,6 @@ MpsParser::parseBounds(boost::iostreams::filtering_istream &file) {
                 if (isub) {
                     ub4cols[colidx] = {1.0};
                 }
-                is_col_integer[colidx] = true;
                 col_type[colidx] = 'B';
             } else {
                 if (islb)
@@ -823,8 +918,6 @@ MpsParser::parseBounds(boost::iostreams::filtering_istream &file) {
             }
 
             if (isintegral) {
-                is_col_integer[colidx] = true;
-
                 if (!islb && lb_is_default[colidx])
                     lb4cols[colidx] = 0.0;
                 if (!isub && ub_is_default[colidx])

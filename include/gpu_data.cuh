@@ -9,7 +9,6 @@ public:
     const double* objective;
     const double* lb;
     const double* ub;
-    const char* var_type;
 
     /* CSR */
     const double* row_val;
@@ -22,7 +21,6 @@ public:
 
     /* We only allow <= and =  rows. */
     const double* rhs;
-    const char* row_sense;
 };
 
 class GpuModel {
@@ -31,7 +29,6 @@ public:
     thrust::device_vector<double> objective;
     thrust::device_vector<double> lb;
     thrust::device_vector<double> ub;
-    thrust::device_vector<char> var_type;
 
     /* CSR */
     thrust::device_vector<double> row_val;
@@ -44,10 +41,15 @@ public:
 
     /* We only allow <= and =  rows. */
     thrust::device_vector<double> rhs;
-    thrust::device_vector<char> row_sense;
 
+    /* Rows are sorted [equalities, inequalities]. */
     int nrows;
+    int n_equalities;
+
+    /* Columns are sorted [binaries, integers, continuous]. */
     int ncols;
+    int n_binaries;
+    int n_integers;
 
     GpuModel(const MIPInstance& data);
     ~GpuModel();

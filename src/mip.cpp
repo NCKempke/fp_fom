@@ -84,9 +84,9 @@ void pass_lp_to_solver(const MIPInstance& mip, MIPModelPtr model) {
     model->objOffset(mip.objOffset);
 }
 
-SolutionPtr makeFromSpan(const MIPInstance &mip, std::span<const double> x, double objval, bool isFeas, double violation)
+std::unique_ptr<Solution> makeFromSpan(const MIPInstance &mip, std::span<const double> x, double objval, bool isFeas, double violation)
 {
-	SolutionPtr sol = std::make_shared<Solution>();
+	auto sol = std::make_unique<Solution>();
 	sol->x.insert(sol->x.end(), x.begin(), x.end());
 	sol->objval = objval;
 	FP_ASSERT(equal(sol->objval, evalObj(mip, sol->x)));

@@ -147,11 +147,15 @@ protected:
 
 		std::string solFile = getProbName(args.input[0]) + ".sol";
 		consoleLog("Writing feasible solution to {}...", solFile);
+
+		const auto &col_map = mip.map_orig_to_new_col;
 		std::ofstream out(solFile);
 		out << fmt::format("=obj= {:.17g}", best_obj);
-		for (int j = 0; j < mip.ncols; j++)
+		for (int icol_orig = 0; icol_orig < mip.ncols; ++icol_orig)
 		{
-			out << fmt::format("{} {:.17g}", mip.cNames[j], sol[j]) << "\n";
+			const int icol_new = col_map[icol_orig];
+
+			out << fmt::format("{} {:.17g}", mip.cNames[icol_new], sol[icol_new]) << "\n";
 		}
 		consoleLog("Done");
 	}

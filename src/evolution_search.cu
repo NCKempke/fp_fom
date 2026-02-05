@@ -177,13 +177,21 @@ int blocks_for_samples(int n_samples_for_type) {
  * TODO:
  * - swap             : select two (binary) variables with different values and swap them
  * - Lagrange         : from Feaspump
+ * - TSP swap?        : swaps 4 binaries I think.
  *
- * - TSP swap?
- * - Avoid duplicate moves!
+ * - Avoid duplicate moves:
+ *    -- random moves only for integers and continuous columns
+ *    -- one_opt (either) only for integers and continuous columns
+ *    -- flip only for binary columns
+ *    -- mtm_satisfied only for integers and continuous within the constraint
+ *    -- mtm_unsatisfied only for integers and continuous within the constraint
  *
  * - Solution pool;
- * - Sync solutions from FPR;
- * - Scoring function;
+ * - Sync solutions from/to global solution pool;
+ * - Scoring function:
+ *    -- secondary score from Local-MIP?
+ * - Mutate solutions in pool after n rounds
+ * - use cuda graph to submit 100-ish rounds at once
  */
 
 struct single_col_move
@@ -318,12 +326,18 @@ struct TabuSearchKernelArgs
     int* n_violated;
     int iter{};
 
+    /* Rows are sorted [equalities, inequalities] */
     int nrows;
+    int n_equalities;
+
+    /* Columns are sorted [binaries, integers, continuous] */
     int ncols;
+    int n_binaries;
+    int n_integers;
 
     int tabu_tenure;
 
-    TabuSearchKernelArgs(TabuSearchDataDevice& data, int nrows_, int ncols_, int tabu_tenure_) : sol(thrust::raw_pointer_cast(data.sol.data())),
+    TabuSearchKernelArgs(TabuSearchDataDevice& data, const MIPInstance& mip, int tabu_tenure_) : sol(thrust::raw_pointer_cast(data.sol.data())),
         slacks(thrust::raw_pointer_cast(data.slacks.data())),
         tabu(thrust::raw_pointer_cast(data.tabu.data())),
         constraint_weights(thrust::raw_pointer_cast(data.constraint_weights.data())),
@@ -333,7 +347,7 @@ struct TabuSearchKernelArgs
         sum_viol(thrust::raw_pointer_cast(data.sum_viol.data())),
         objective(thrust::raw_pointer_cast(data.objective.data())),
         n_violated(thrust::raw_pointer_cast(data.n_violated.data())),
-        nrows(nrows_), ncols(ncols_), tabu_tenure(tabu_tenure_) {
+        nrows(mip.nrows), n_equalities(mip.n_equalities), ncols(mip.ncols), n_binaries(mip.n_binaries), n_integers(mip.n_integers), tabu_tenure(tabu_tenure_) {
     };
 };
 
@@ -368,7 +382,7 @@ __device__ move_score compute_score_single_col_move_warp(const GpuModelPtrs &mod
         const double weight = args.constraint_weights[scaled_row_idx];
 
         /* We have <= and = only. */
-        const double is_eq = (model.row_sense[row_idx] == 'E');
+        const double is_eq = row_idx < args.n_equalities;
 
         const double slack_old = args.slacks[scaled_row_idx];
         const double slack_new = slack_old - coef * delta;
@@ -400,7 +414,7 @@ __device__ move_score compute_score_single_col_move_warp(const GpuModelPtrs &mod
 }
 
 /* Returns for threadIdx.x == 0 the score after virtually applying give move. */
-__device__ move_score compute_score_col_swap(const GpuModelPtrs &model, const double *slack, const double *sol, const swap_move move, int solution_index)
+__device__ move_score compute_score_col_swap(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, const double *slack, const double *sol, const swap_move move, int solution_index)
 {
     const int thread_idx = threadIdx.x;
     const int col1 = move.col1;
@@ -438,7 +452,7 @@ __device__ move_score compute_score_col_swap(const GpuModelPtrs &model, const do
         const int row_idx = model.col_idx_trans[inz];
 
         /* We have <= and = only. */
-        const int is_eq = (model.row_sense[row_idx] == 'E');
+        const int is_eq = row_idx < args.n_equalities;
 
         const double slack_old = slack[row_idx];
         const double slack_new = slack_old - coef * delta1;
@@ -458,7 +472,7 @@ __device__ move_score compute_score_col_swap(const GpuModelPtrs &model, const do
         const int row_idx = model.col_idx_trans[inz];
 
         /* We have <= and = only. */
-        const int is_eq = (model.row_sense[row_idx] == 'E');
+        const int is_eq = row_idx < args.n_equalities;
 
         const double slack_old = slack[row_idx];
         const double slack_new = slack_old - coef * delta2;
@@ -501,11 +515,11 @@ __device__ void compute_random_move(const GpuModelPtrs &model, curandState &rand
     int scaled_col = col + solution_index * args.ncols;
     double col_val = args.sol[scaled_col];
 
-    if (model.var_type[col] == 'B')
+    if (col < args.n_binaries)
     {
         fix_val = 1.0 - col_val;
     }
-    else if (model.var_type[col] == 'I')
+    else if (col < args.n_binaries + args.n_integers)
     {
         int ilb = (int)lb;
         int iub = (int)ub;
@@ -524,7 +538,6 @@ __device__ void compute_random_move(const GpuModelPtrs &model, curandState &rand
     }
 
     assert(lb <= fix_val && fix_val <= ub);
-    assert(fix_val != col_val || model.var_type[col] == 'C');
 
     /* score is valid only for threadIdx.x == 0 */
     const auto score = compute_score_single_col_move_warp(model, args, {fix_val, col}, solution_index);
@@ -581,9 +594,8 @@ __device__ void compute_oneopt_move(const GpuModelPtrs &model, const TabuSearchK
             const double coef = model.row_val_trans[inz];
             const int row_idx = model.col_idx_trans[inz];
             const int scaled_row_idx = row_idx + solution_index * args.nrows;
-            const char sense = model.row_sense[row_idx];
+            const int is_eq = row_idx < args.n_equalities;
             const double row_slack = args.slacks[scaled_row_idx];
-            const int is_eq = sense == 'E';
             const int is_objcoef_pos = (obj * coef > 0.0);
             const int is_row_slack_neg = is_lt_feas(row_slack, 0.0);
 
@@ -628,7 +640,8 @@ __device__ void compute_flip_move(const GpuModelPtrs &model, const TabuSearchKer
 {
     const int thread_idx_warp = threadIdx.x % WARP_SIZE;
 
-    if (col >= args.ncols || model.var_type[col] != 'B')
+    /* Only for binaries. */
+    if (col >= args.n_binaries)
         return;
 
     const int scaled_col = col + solution_index * args.ncols;
@@ -703,7 +716,7 @@ __device__ void compute_mtm_move(const GpuModelPtrs &model, const TabuSearchKern
         double fix_val = old_val + slack_for_row / coeff;
         assert_if_then_else(move_up, fix_val > old_val, fix_val < old_val);
 
-        if (model.var_type[col] != 'C')
+        if (col < args.n_binaries + args.n_integers)
             fix_val = move_up ? ceil(fix_val) : floor(fix_val);
         fix_val = fmin(fmax(fix_val, lb), ub);
 
@@ -993,7 +1006,7 @@ __global__ void update_weights_kernel(
 
     // Check if constraint is violated
     const double slack = args.slacks[row_idx_scaled];
-    const bool is_eq = model.row_sense[row_idx] == 'E';
+    const bool is_eq = row_idx < args.n_equalities;
     const bool is_violated = is_eq ? !is_eq_feas(slack, 0) : is_lt_feas(slack, 0);
 
     if (SMOOTHING) {
@@ -1031,7 +1044,7 @@ __global__ void apply_move(const GpuModelPtrs &model, const TabuSearchKernelArgs
 
     const double old_val = args.sol[scaled_col];
     assert(model.lb[col] <= val && val <= model.ub[col]);
-    assert_if_then(model.var_type[col] != 'C', is_integer(val));
+    assert_if_then(col < args.n_binaries + args.n_integers, is_integer(val));
     assert(!is_eq(old_val, val));
 
     if (thread_idx == 0) {
@@ -1143,11 +1156,11 @@ double thrust_dot_product(const thrust::device_vector<double> &a,
 struct IsViolated
 {
     const double *slack;
-    const char *row_sense;
+    const int n_equalities;
 
     __device__ bool operator()(int idx) const
     {
-        const int is_eq = row_sense[idx] == 'E';
+        const int is_eq = idx < n_equalities;
         const double slack_row = slack[idx];
 
         /* If we have an equality, any slack counts. If we have an inequality, we only count negative slack rhs - Ax >= 0. Branching does not really matter here. */
@@ -1340,7 +1353,7 @@ void EvolutionSearch::run(MIPData &data) const {
         data_device.sol.begin() + model_host.ncols * 2
     );
 
-    TabuSearchKernelArgs args_device(data_device, model_host.nrows, model_host.ncols, tabu_tenure);
+    TabuSearchKernelArgs args_device(data_device, model_host, tabu_tenure);
 
     // calculate slack and sum_viol
     assert(data_device.slacks.size() == max_solutions * model_host.nrows);
@@ -1353,25 +1366,23 @@ void EvolutionSearch::run(MIPData &data) const {
                 thrust::raw_pointer_cast(data_device.slacks.data()));
 
     //TODO move this too to device
-    std::vector<double> host_sum_viol (3,0);
+    std::vector<double> host_sum_viol (max_solutions,0);
     for (int solution_index =0; solution_index < max_solutions; ++solution_index) {
-        for (int irow = 0; irow < model_host.nrows; ++irow)
-        {
-            FP_ASSERT(model_host.sense[irow] == 'L' || model_host.sense[irow] == 'E');
-
+        for (int irow = 0; irow < model_host.nrows; ++irow) {
             const int scaled_row = irow + solution_index * model_host.nrows;
             const double slack_row = data_device.slacks[scaled_row];
+            FP_ASSERT(model_host.sense[irow] == 'L' || model_host.sense[irow] == 'E');
 
-            if (model_host.sense[irow] == 'L' && is_lt_feas(slack_row, 0))
-            {
-                host_sum_viol[solution_index] += fabs(slack_row);
-            }
-            if (model_host.sense[irow] == 'E' && !is_eq_feas(slack_row, 0))
-            {
-                host_sum_viol[solution_index] += fabs(slack_row);
-            }
+        if (irow < model_host.n_equalities)
+        {
+            if (!is_eq_feas(slack_row, 0))
+                 host_sum_viol[solution_index] += fabs(slack_row);
+        } else {
+            if (is_lt_feas(slack_row, 0))
+                 host_sum_viol[solution_index] += fabs(slack_row);
         }
     }
+
     thrust::copy(host_sum_viol.begin(), host_sum_viol.end(), data_device.sum_viol.begin());
 
     assert(data_device.sol.size() == max_solutions * model_host.ncols);
@@ -1406,8 +1417,6 @@ void EvolutionSearch::run(MIPData &data) const {
      *
      */
 
-    // TODO: sort ints and bins/extract them. Many moves only make sense for ints and bins!
-
     consoleLogNoLineBreak("Initial slack [\t");
     for (int i= 0; i < max_solutions; ++i) {
         consoleLogNoLineBreak("{},", host_sum_viol[i]);
@@ -1438,7 +1447,7 @@ void EvolutionSearch::run(MIPData &data) const {
                 thrust::device,
                 start_index,
                 data_device.violated_constraints.begin() + (i + 1) * model_host.nrows,
-                IsViolated{args_device.slacks + i * model_host.nrows, gpu_model_ptrs.row_sense});
+                IsViolated{args_device.slacks + i * model_host.nrows, args_device.n_equalities});
             n_violated_host[i] = partition_point - start_index;
             consoleLog("Found {} violated constraints", n_violated_host[i]);
         }
