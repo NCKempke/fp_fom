@@ -1469,7 +1469,7 @@ void EvolutionSearch::run(MIPData &data) const {
             if (i_round != 0 && i_round % UPDATE_FREQUENCE == 0) {
                 update_references_for_solution_index(solution_index, data_device, model_device, gpu_model_ptrs, tabu_tenure, false);
             }
-            update_violated_constraints(solution_index, data_device, args_device, model_host);
+            update_violated_constraints(solution_index, data_device, args_device, model_device);
 #define EXTENDED_DEBUG
 #ifdef EXTENDED_DEBUG
             //TODO: this is just currently for EXTENDED_DEBUGGING to be removed later
