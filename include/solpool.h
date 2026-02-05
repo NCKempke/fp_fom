@@ -48,7 +48,7 @@ public:
     /* Get best feasible solution; if !hasSols, returns empty vector. */
     Solution getIncumbent() const;
 
-    /* Return objective of incumbent. Retuns +- INFTY if !hasSols. */
+    /* Return objective of incumbent. Retuns +- INFTY if !hasFeas. */
     double primalBound() const;
 
     /* Return minimum violation of all solutions stored. */
