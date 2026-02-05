@@ -1433,8 +1433,9 @@ void EvolutionSearch::run(MIPData &data) const {
         if (!is_relaxed_solution_copied) {
             if (data.lp_solution_ready) {
                 //TODO round: primals
-                copy_solution_to_device(max_solutions-1, data.primals, data_device, model_device, gpu_model_ptrs);
+                copy_solution_to_device(max_solutions - 1, data.primals, data_device, model_device, gpu_model_ptrs);
             }
+            is_relaxed_solution_copied = true;
         }
 
         /* Each kernel and block get assigned as this rounds random seed:
