@@ -580,7 +580,7 @@ __device__ void compute_oneopt_move(const GpuModelPtrs &model, const TabuSearchK
         {
             const double coef = model.row_val_trans[inz];
             const int row_idx = model.col_idx_trans[inz];
-            const char row_slack = args.slacks[row_idx];
+            const double row_slack = args.slacks[row_idx];
             const int is_eq = row_idx < args.n_equalities;
             const int is_objcoef_pos = (obj * coef > 0.0);
             const int is_row_slack_neg = is_lt_feas(row_slack, 0.0);
