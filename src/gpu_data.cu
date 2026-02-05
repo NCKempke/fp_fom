@@ -11,15 +11,6 @@ GpuModel::GpuModel(const MIPInstance& mip) {
     lb = mip.lb;
     ub = mip.ub;
 
-    var_type = mip.xtype;
-
-#ifndef NDEBUG
-    for (int icol = 0; icol < mip.ncols; ++icol) {
-        FP_ASSERT_IF_THEN(mip.xtype[icol] == 'B', icol < mip.n_binaries);
-        FP_ASSERT_IF_THEN(mip.xtype[icol] == 'I', mip.n_binaries <= icol && icol < mip.n_binaries + mip.n_integers);
-        FP_ASSERT_IF_THEN(mip.xtype[icol] == 'C', mip.n_binaries + mip.n_integers <= icol);
-    }
-#endif
 
     row_val = row_matrix.val;
     col_idx = row_matrix.ind;
@@ -33,18 +24,28 @@ GpuModel::GpuModel(const MIPInstance& mip) {
     FP_ASSERT(col_matrix.beg.size() == col_matrix.k + 1 && col_matrix.beg[col_matrix.k] == col_matrix.nnz);
 
     rhs = mip.rhs;
-    row_sense = mip.sense;
+
+    nrows = mip.nrows;
+    n_equalities = mip.n_equalities;
+
+    ncols = mip.ncols;
+    n_binaries = mip.n_binaries;
+    n_integers = mip.n_integers;
 
 #ifndef NDEBUG
+    /* Assert rows and columns are sorted. */
+    for (int icol = 0; icol < mip.ncols; ++icol) {
+        FP_ASSERT_IF_THEN(mip.xtype[icol] == 'B', icol < mip.n_binaries);
+        FP_ASSERT_IF_THEN(mip.xtype[icol] == 'I', mip.n_binaries <= icol && icol < mip.n_binaries + mip.n_integers);
+        FP_ASSERT_IF_THEN(mip.xtype[icol] == 'C', mip.n_binaries + mip.n_integers <= icol);
+    }
+
     for (int irow = 0; irow < mip.nrows; ++irow) {
         FP_ASSERT(mip.sense[irow] == 'E' || mip.sense[irow] == 'L');
         FP_ASSERT_IF_THEN(mip.sense[irow] == 'E', irow < mip.n_equalities);
         FP_ASSERT_IF_THEN(mip.sense[irow] == 'L', mip.n_equalities <= irow);
     }
 #endif
-
-    nrows = mip.nrows;
-    ncols = mip.ncols;
 }
 
 GpuModel::~GpuModel() {
@@ -56,7 +57,6 @@ GpuModelPtrs GpuModel::get_ptrs () const {
     ptrs.objective = thrust::raw_pointer_cast(objective.data());
     ptrs.lb = thrust::raw_pointer_cast(lb.data());
     ptrs.ub = thrust::raw_pointer_cast(ub.data());
-    ptrs.var_type = thrust::raw_pointer_cast(var_type.data());
 
     /* CSR */
     ptrs.row_val = thrust::raw_pointer_cast(row_val.data());
@@ -69,7 +69,6 @@ GpuModelPtrs GpuModel::get_ptrs () const {
 
     /* We only allow <= and =  rows. */
     ptrs.rhs = thrust::raw_pointer_cast(rhs.data());
-    ptrs.row_sense = thrust::raw_pointer_cast(row_sense.data());
 
     return ptrs;
 }
