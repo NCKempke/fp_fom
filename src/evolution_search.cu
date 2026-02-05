@@ -1287,7 +1287,7 @@ void update_references_for_solution_index(const int solution_index, TabuSearchDa
         0.0);
     if (reset) {
         thrust::fill(data_device.tabu.begin() + solution_index * model.ncols,
-                     data_device.tabu.end() + (solution_index + 1) * model.ncols, -tabu_tenure);
+                     data_device.tabu.begin() + (solution_index + 1) * model.ncols, -tabu_tenure);
         thrust::fill(data_device.constraint_weights.begin() + solution_index * model.nrows, data_device.constraint_weights.begin() + (solution_index+1) * model.nrows, 1);
         thrust::fill(data_device.objective_weight.begin() + solution_index * model.ncols,
                      data_device.objective_weight.begin() + (solution_index + 1) * model.ncols, 1);
@@ -1465,9 +1465,9 @@ void EvolutionSearch::run(MIPData &data) const {
             if (!activate_solutions[solution_index])
                 continue;
 
-            // if (i_round != 0 && i_round % UPDATE_FREQUENCE == 0) {
-            //     update_references_for_solution_index(solution_index, data_device, model_device, gpu_model_ptrs, tabu_tenure, false);
-            // }
+            if (i_round != 0 && i_round % UPDATE_FREQUENCE == 0) {
+                update_references_for_solution_index(solution_index, data_device, model_device, gpu_model_ptrs, tabu_tenure, false);
+            }
             update_violated_constraints(solution_index, data_device, args_device, model_host);
 #define EXTENDED_DEBUG
 #ifdef EXTENDED_DEBUG
