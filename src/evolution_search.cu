@@ -1238,22 +1238,29 @@ void EvolutionSearch::run()
     csr_spmv_kernel<<<512, 1024>>>(model_device.nrows, gpu_model_ptrs, thrust::raw_pointer_cast(data_device.sol.data()), -1.0,
                 thrust::raw_pointer_cast(data_device.slacks.data()));
 
-    // TODO move this too to device
-    double sum_viol = 0.0;
-    for (int irow = 0; irow < model_host.nrows; ++irow)
-    {
-        const double slack_row = data_device.slacks[irow];
+    // equalities
+    double sum_viol = thrust::transform_reduce(
+        thrust::device,
+        data_device.slacks.begin(),
+        data_device.slacks.begin() + model_host.n_equalities,
+        [] __device__ (const double x) -> double {
+            return !is_eq_feas(x, 0) ? fabs(x) : 0.0;
+        },
+        0.0,
+        thrust::plus<double>()
+    );
 
-        if (irow < model_host.n_equalities)
-        {
-            if (!is_eq_feas(slack_row, 0))
-                sum_viol += fabs(slack_row);
-        } else {
-            if (is_lt_feas(slack_row, 0))
-                sum_viol += fabs(slack_row);
-        }
-    }
-    args_device.sum_viol = sum_viol;
+    // inequalities
+    args_device.sum_viol = thrust::transform_reduce(
+        thrust::device,
+        data_device.slacks.begin() + model_host.n_equalities,
+        data_device.slacks.end(),
+        [] __device__ (const double x) -> double {
+            return is_lt_feas(x, 0) ? fabs(x) : 0.0;
+        },
+        sum_viol,
+        thrust::plus<double>()
+    );
     args_device.objective = thrust_dot_product(data_device.sol, model_device.objective);
 
     consoleInfo("Starting evolution search on GPU");
