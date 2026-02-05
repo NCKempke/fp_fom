@@ -40,6 +40,7 @@ constexpr int N_MOVES_PER_SINGLE_COL_BLOCK = N_MOVES_PER_WARP * N_WARPS_PER_BLOC
 constexpr int BLOCKSIZE_VECTOR_KERNEL = 1024; /* Blocksize used for vector kernels (each thread operating on one vector element). */
 
 constexpr int AVAILABLE_MOVES = 6;
+constexpr int UPDATE_FREQUENCE = 100;
 
 constexpr double MAX_VALUE_FOR_HUGE_BOUNDS = 1000;
 
@@ -1254,8 +1255,8 @@ std::tuple<std::array<int, AVAILABLE_MOVES>, std::array<move_config, AVAILABLE_M
 }
 
 void update_references_for_solution_index(const int solution_index, TabuSearchDataDevice &data_device,
-                             const GpuModel& model, const GpuModelPtrs &model_ptrs, const int tabu_tenure) {
-
+                                          const GpuModel &model, const GpuModelPtrs &model_ptrs, const int tabu_tenure,
+                                          bool reset = true) {
     thrust::copy(model.rhs.begin(), model.rhs.end(),
                  data_device.slacks.begin() + solution_index * model.nrows);
     csr_spmv_kernel_index<<<512, 1024>>>(model.nrows, model.ncols, solution_index, model_ptrs,
@@ -1284,13 +1285,13 @@ void update_references_for_solution_index(const int solution_index, TabuSearchDa
         data_device.sol.begin() + (solution_index + 1) * model.ncols,
         model.objective.begin(),
         0.0);
-    thrust::fill(data_device.tabu.begin(), data_device.tabu.end(), -tabu_tenure);
-    thrust::fill(data_device.constraint_weights.begin(), data_device.constraint_weights.end(), 1);
-    thrust::fill(data_device.objective_weight.begin(), data_device.objective_weight.end(), 1);
-    //TODO: how to handle n_violated and violated constraints currently they are calcluated every round
-
-    consoleLog("Initial slack {} \t initial objective {}\t for solution at pos {}", data_device.sum_viol[solution_index], data_device.objective[solution_index], solution_index);
-
+    if (reset) {
+        thrust::fill(data_device.tabu.begin(), data_device.tabu.end(), -tabu_tenure);
+        thrust::fill(data_device.constraint_weights.begin(), data_device.constraint_weights.end(), 1);
+        thrust::fill(data_device.objective_weight.begin(), data_device.objective_weight.end(), 1);
+        consoleLog("Initial slack {} \t initial objective {}\t for solution at pos {}",
+                   data_device.sum_viol[solution_index], data_device.objective[solution_index], solution_index);
+    }
 }
 
 void update_violated_constraints(const int solution_index, TabuSearchDataDevice& data_device, TabuSearchKernelArgs &args,
@@ -1457,19 +1458,24 @@ void EvolutionSearch::run(MIPData &data) const {
         int nmoves_total = 1e5 * AVAILABLE_MOVES;
 
 
+        /* iterate over all solutions*/
         for (int solution_index = 0; solution_index < max_solutions; ++solution_index) {
+            /* skip inactive solutions*/
             if (!activate_solutions[solution_index])
                 continue;
-            //TODO: update the sum_viol and objective to avoid divergence due to numerics
 
+            if (round != 0 && round % UPDATE_FREQUENCE == 0) {
+                update_references_for_solution_index(solution_index, data_device, model_device, gpu_model_ptrs, tabu_tenure, false);
+            }
             update_violated_constraints(solution_index, data_device, args_device, model_host);
-
-
-            //TODO: this is just currently for debugging to be removed later
+#define EXTENDED_DEBUG
+#ifdef EXTENDED_DEBUG
+            //TODO: this is just currently for EXTENDED_DEBUGGING to be removed later
             if (data_device.n_violated[solution_index] == 0) {
                 consoleInfo("Found feasible!");
                 return;
             }
+#endif
 
             /* Update the moves distribution, compute number of moves and blocks per moves kernel. This might reallocate best_scores_single_col and best_single_col_moves. Updates global seed count and assignes each kernel a unique seed. */
             //TODO: make this dynamic for each solution
@@ -1576,8 +1582,7 @@ void EvolutionSearch::run(MIPData &data) const {
             /* Apply best move.  update also objective and violation*/
             apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index, solution_index, score.objective_change, score.violation_change);
 
-#define DEBUG
-#ifdef DEBUG
+#ifdef EXTENDED_DEBUG
             double new_objective, new_violation;
 
             cudaMemcpy(&new_objective,
