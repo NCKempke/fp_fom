@@ -1255,8 +1255,7 @@ void recompute_solution_violation_metrics(TabuSearchDataDevice &data_device, Tab
 
 }
 
-void EvolutionSearch::run(MIPData &data)
-{
+void EvolutionSearch::run(MIPData &data) {
     int seed = 0;
 
     /* For smoothing decision. */
@@ -1277,26 +1276,38 @@ void EvolutionSearch::run(MIPData &data)
 
     auto gpu_model_ptrs = model_device.get_ptrs();
 
-    //generate  0 - solution
-    TabuSearchDataDevice data_device(model_host.nrows, model_host.ncols, tabu_tenure);
+    int max_solutions = 10;
+    std::vector active_solutions (max_solutions, false);
+    // Data devices and kernel args
+    std::vector<TabuSearchDataDevice> data_devices;
+    data_devices.reserve(max_solutions);
 
-    thrust::fill(data_device.sol.begin(), data_device.sol.end(), 0.0);
+    std::vector<TabuSearchKernelArgs> args_devices;
+    args_devices.reserve(max_solutions);
+
+    // Construct the first solution
+    data_devices.emplace_back(model_host.nrows, model_host.ncols, tabu_tenure);
+    args_devices.emplace_back(data_devices[0], model_host, tabu_tenure);
+    active_solutions[0] = true;
+
+    thrust::fill(data_devices[0].sol.begin(), data_devices[0].sol.end(), 0.0);
+
     thrust::transform(
-        data_device.sol.begin(), data_device.sol.end(),
+        data_devices[0].sol.begin(), data_devices[0].sol.end(),
         model_device.lb.begin(),
-        data_device.sol.begin(),
+        data_devices[0].sol.begin(),
         cuda::maximum<double>()
     );
     thrust::transform(
-        data_device.sol.begin(), data_device.sol.end(),
+        data_devices[0].sol.begin(), data_devices[0].sol.end(),
         model_device.ub.begin(),
-        data_device.sol.begin(),
+        data_devices[0].sol.begin(),
         cuda::minimum<double>()
     );
 
-    TabuSearchKernelArgs args_device(data_device, model_host, tabu_tenure);
+    // TabuSearchKernelArgs args_device(data_device_0, model_host, tabu_tenure);
 
-    recompute_solution_metrics(data_device, args_device, gpu_model_ptrs, model_device, model_host.n_equalities, tabu_tenure);
+    recompute_solution_metrics(data_devices[0], args_devices[0], gpu_model_ptrs, model_device, model_host.n_equalities, tabu_tenure);
 #define EXTENDED_DEBUG
 
 // #ifdef EXTENDED_DEBUG
@@ -1340,187 +1351,194 @@ void EvolutionSearch::run(MIPData &data)
      */
 
     bool lp_solution_loaded = false;
-    for (int i_round = 0; i_round < n_rounds; ++i_round)
-    {
-        args_device.iter = i_round;
-
+    for (int i_round = 0; i_round < n_rounds; ++i_round) {
         if ( i_round % LP_SOLUTION_FREQ == 0 && !lp_solution_loaded) {
             //TODO: load LP solution
             lp_solution_loaded = true;
         }
+        for (int solution_index=0; solution_index< max_solutions; ++solution_index)
+        {
+            if (!active_solutions[solution_index])
+                continue;
+            auto& args_device = args_devices[0];
+            auto& data_device = data_devices[0];
+            args_device.iter = i_round;
 
-        /* Each kernel and block get assigned as this rounds random seed:
-         * i_rounds * (MOVES * BLOCKS) + BLOCKS * i_move + i_block
-         */
-        int nmoves_total = 1e5 * AVAILABLE_MOVES;
 
-        recompute_solution_violation_metrics(data_device, args_device);
+
+            /* Each kernel and block get assigned as this rounds random seed:
+             * i_rounds * (MOVES * BLOCKS) + BLOCKS * i_move + i_block
+             */
+            int nmoves_total = 1e5 * AVAILABLE_MOVES;
+
+            recompute_solution_violation_metrics(data_device, args_device);
 
 #ifdef EXTENDED_DEBUG
-        if (args_device.n_violated == 0) {
-            consoleInfo("Found feasible!");
-            return;
-        }
+            if (args_device.n_violated == 0) {
+                consoleInfo("Found feasible!");
+                return;
+            }
 #endif
 
-        /* Update the moves distribution, compute number of moves and blocks per moves kernel. This might reallocate best_scores_single_col and best_single_col_moves. Updates global seed count and assignes each kernel a unique seed. */
-        const auto [blocks_per_move, config_per_move, n_blocks_total] = prepare_sample_submission(best_scores_single_col, best_single_col_moves, probabilities, seed, nmoves_total);
+            /* Update the moves distribution, compute number of moves and blocks per moves kernel. This might reallocate best_scores_single_col and best_single_col_moves. Updates global seed count and assignes each kernel a unique seed. */
+            const auto [blocks_per_move, config_per_move, n_blocks_total] = prepare_sample_submission(best_scores_single_col, best_single_col_moves, probabilities, seed, nmoves_total);
 
-        // for ( int i = 0; i < args_device.n_violated; i++) {
-        //     consoleLog("Index: {}",data_device.violated_constraints[i]);
-        //
+            // for ( int i = 0; i < args_device.n_violated; i++) {
+            //     consoleLog("Index: {}",data_device.violated_constraints[i]);
+            //
 
-        move_score* best_scores_single_col_ptr = thrust::raw_pointer_cast(best_scores_single_col.data());
-        single_col_move* best_single_col_moves_ptr = thrust::raw_pointer_cast(best_single_col_moves.data());
+            move_score* best_scores_single_col_ptr = thrust::raw_pointer_cast(best_scores_single_col.data());
+            single_col_move* best_single_col_moves_ptr = thrust::raw_pointer_cast(best_single_col_moves.data());
 
-        if (blocks_per_move[0] > 0) {
-            compute_random_moves_kernel<<<blocks_per_move[0], BLOCKSIZE_MOVE>>>(
-                gpu_model_ptrs, args_device, config_per_move[0]);
-        }
+            if (blocks_per_move[0] > 0) {
+                compute_random_moves_kernel<<<blocks_per_move[0], BLOCKSIZE_MOVE>>>(
+                    gpu_model_ptrs, args_device, config_per_move[0]);
+            }
 
-        if (blocks_per_move[1] > 0) {
-            compute_oneopt_moves_kernel<false><<<blocks_per_move[1], BLOCKSIZE_MOVE>>>(
-                gpu_model_ptrs, args_device, config_per_move[1]);
-        }
+            if (blocks_per_move[1] > 0) {
+                compute_oneopt_moves_kernel<false><<<blocks_per_move[1], BLOCKSIZE_MOVE>>>(
+                    gpu_model_ptrs, args_device, config_per_move[1]);
+            }
 
-        if (blocks_per_move[2] > 0) {
-            compute_oneopt_moves_kernel<true><<<blocks_per_move[2], BLOCKSIZE_MOVE>>>(
-                gpu_model_ptrs, args_device, config_per_move[2]);
-        }
+            if (blocks_per_move[2] > 0) {
+                compute_oneopt_moves_kernel<true><<<blocks_per_move[2], BLOCKSIZE_MOVE>>>(
+                    gpu_model_ptrs, args_device, config_per_move[2]);
+            }
 
-        if (blocks_per_move[3] > 0) {
-            compute_flip_moves_kernel<<<blocks_per_move[3], BLOCKSIZE_MOVE>>>(
-                gpu_model_ptrs, args_device, config_per_move[3]);
-        }
+            if (blocks_per_move[3] > 0) {
+                compute_flip_moves_kernel<<<blocks_per_move[3], BLOCKSIZE_MOVE>>>(
+                    gpu_model_ptrs, args_device, config_per_move[3]);
+            }
 
-        if (blocks_per_move[4] > 0) {
-            compute_mtm_unsat_moves_kernel<<<blocks_per_move[4], BLOCKSIZE_MOVE>>>(
-                gpu_model_ptrs, args_device, config_per_move[4]);
-        }
+            if (blocks_per_move[4] > 0) {
+                compute_mtm_unsat_moves_kernel<<<blocks_per_move[4], BLOCKSIZE_MOVE>>>(
+                    gpu_model_ptrs, args_device, config_per_move[4]);
+            }
 
-        if (blocks_per_move[5] > 0) {
-            compute_mtm_sat_moves_kernel<<<blocks_per_move[5], BLOCKSIZE_MOVE>>>(
-                gpu_model_ptrs, args_device, config_per_move[5]);
-        }
+            if (blocks_per_move[5] > 0) {
+                compute_mtm_sat_moves_kernel<<<blocks_per_move[5], BLOCKSIZE_MOVE>>>(
+                    gpu_model_ptrs, args_device, config_per_move[5]);
+            }
 
-        // /* ----- */
-        // thrust::host_vector<move_score> host_scores = best_scores_single_col;
-        // for ( auto &[objective, violation, weighted_violation]: host_scores) {
-        //     consoleLog("{} {} {}", objective, violation, weighted_violation);
-        // }
+            // /* ----- */
+            // thrust::host_vector<move_score> host_scores = best_scores_single_col;
+            // for ( auto &[objective, violation, weighted_violation]: host_scores) {
+            //     consoleLog("{} {} {}", objective, violation, weighted_violation);
+            // }
 
-        /* Reduce best moves to get globally best move. */
-        auto max_iter = thrust::min_element(thrust::device, best_scores_single_col.begin(),
-                                            best_scores_single_col.begin() + n_blocks_total,
-                                            [] __device__(const move_score &a, const move_score &b)
-                                            {
-                                                return a.is_lt_feas_score(b);
-                                            });
+            /* Reduce best moves to get globally best move. */
+            auto max_iter = thrust::min_element(thrust::device, best_scores_single_col.begin(),
+                                                best_scores_single_col.begin() + n_blocks_total,
+                                                [] __device__(const move_score &a, const move_score &b)
+                                                {
+                                                    return a.is_lt_feas_score(b);
+                                                });
 
-        int min_index = max_iter - best_scores_single_col.begin();
-        move_score score = (*max_iter); // Hidden copy GPU -> CPU
+            int min_index = max_iter - best_scores_single_col.begin();
+            move_score score = (*max_iter); // Hidden copy GPU -> CPU
 
-        if (score.weighted_violation_change >= 0.0) {
-            consoleLog("No more good moves; updating weights!");
-            const int n_blocks = (model_host.nrows + BLOCKSIZE_VECTOR_KERNEL - 1) / BLOCKSIZE_VECTOR_KERNEL;
+            if (score.weighted_violation_change >= 0.0) {
+                consoleLog("No more good moves; updating weights!");
+                const int n_blocks = (model_host.nrows + BLOCKSIZE_VECTOR_KERNEL - 1) / BLOCKSIZE_VECTOR_KERNEL;
 
-            /* Update the weigths and continue!  */
-            if (dist(gen) < smooth_prob)
-                update_weights_kernel<true><<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(gpu_model_ptrs, args_device);
+                /* Update the weigths and continue!  */
+                if (dist(gen) < smooth_prob)
+                    update_weights_kernel<true><<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(gpu_model_ptrs, args_device);
+                else
+                    update_weights_kernel<false><<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(gpu_model_ptrs, args_device);
+
+                continue;
+            }
+
+            double min_value = score.weighted_violation_change;
+            assert(min_value != DBL_MAX && min_value < 0.0);
+
+            int offset_random = 0;
+            int offset_oneopt = offset_random + blocks_per_move[0];
+            int offset_oneopt_greedy = offset_oneopt + blocks_per_move[1];
+            int offset_flip = offset_oneopt_greedy + blocks_per_move[2];
+            int offset_mtm_unsat = offset_flip + blocks_per_move[3];
+            int offset_mtm_sat = offset_mtm_unsat + blocks_per_move[4];
+
+            std::string move_name;
+            if (min_index >= offset_mtm_sat)
+                move_name = "mtm_sat";
+            else if (min_index >= offset_mtm_unsat)
+                move_name = "mtm_unsat";
+            else if (min_index >= offset_flip)
+                move_name = "flip";
+            else if (min_index >= offset_oneopt_greedy)
+                move_name = "oneopt_greedy";
+            else if (min_index >= offset_oneopt)
+                move_name = "oneopt";
+            else if (min_index >= offset_random)
+                move_name = "random";
             else
-                update_weights_kernel<false><<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(gpu_model_ptrs, args_device);
+                move_name = "unknown";
 
-            continue;
-        }
+            consoleLog("Taking {} move", move_name);
+            consoleLog("(idx, move_score: (obj_change, slack_change, score)): {} ({}, {}, {})", min_index, score.objective_change, score.violation_change, score.weighted_violation_change);
 
-        double min_value = score.weighted_violation_change;
-        assert(min_value != DBL_MAX && min_value < 0.0);
+            /* Apply best move. */
+            apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index, score.objective_change, score.violation_change);
 
-        int offset_random = 0;
-        int offset_oneopt = offset_random + blocks_per_move[0];
-        int offset_oneopt_greedy = offset_oneopt + blocks_per_move[1];
-        int offset_flip = offset_oneopt_greedy + blocks_per_move[2];
-        int offset_mtm_unsat = offset_flip + blocks_per_move[3];
-        int offset_mtm_sat = offset_mtm_unsat + blocks_per_move[4];
+            args_device.objective += score.objective_change;
+            args_device.sum_viol += score.violation_change;
 
-        std::string move_name;
-        if (min_index >= offset_mtm_sat)
-            move_name = "mtm_sat";
-        else if (min_index >= offset_mtm_unsat)
-            move_name = "mtm_unsat";
-        else if (min_index >= offset_flip)
-            move_name = "flip";
-        else if (min_index >= offset_oneopt_greedy)
-            move_name = "oneopt_greedy";
-        else if (min_index >= offset_oneopt)
-            move_name = "oneopt";
-        else if (min_index >= offset_random)
-            move_name = "random";
-        else
-            move_name = "unknown";
+            consoleLog("(objective, sum_viol): {} {}", args_device.objective, args_device.sum_viol);
 
-        consoleLog("Taking {} move", move_name);
-        consoleLog("(idx, move_score: (obj_change, slack_change, score)): {} ({}, {}, {})", min_index, score.objective_change, score.violation_change, score.weighted_violation_change);
+            if (i_round > 0 && i_round % RECOMPUTE_SOL_METRICS_FREQ == 0) {
+                recompute_solution_metrics(data_device, args_device, gpu_model_ptrs, model_device, model_host.n_equalities, tabu_tenure);
+            }
 
-        /* Apply best move. */
-        apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index, score.objective_change, score.violation_change);
+            // TODO: make 100 a #define
+            if (i_round > 0 && i_round % SOLUTION_TRANSFER_FREQ == 0) {
+                // ensure that the solution metrics are updated
+                assert(RECOMPUTE_SOL_METRICS_FREQ % SOLUTION_TRANSFER_FREQ == 0);
+                /* TODO: Check whether our partial solution's objective is good enough to be stored in the partial solutions pool. */
+                thrust::host_vector<double> sol_host = data_device.sol; /* Copy back solution. */
 
-        args_device.objective += score.objective_change;
-        args_device.sum_viol += score.violation_change;
+                consoleInfo("Moving solution to partial pool");
+                auto sol = std::make_unique<Solution>();
+                sol->x.insert(sol->x.end(), sol_host.begin(), sol_host.end());
+                sol->objval = args_device.objective; // TODO recompute
+                sol->isFeas = false; // TODO only a hack
+                sol->absViolation = args_device.sum_viol; // TODO only a hack
+                sol->relViolation = sol->absViolation / model_host.maxRhs;
 
-        consoleLog("(objective, sum_viol): {} {}", args_device.objective, args_device.sum_viol);
-
-        if (i_round > 0 && i_round % RECOMPUTE_SOL_METRICS_FREQ == 0) {
-            recompute_solution_metrics(data_device, args_device, gpu_model_ptrs, model_device, model_host.n_equalities, tabu_tenure);
-        }
-
-        // TODO: make 100 a #define
-        if (i_round > 0 && i_round % SOLUTION_TRANSFER_FREQ == 0) {
-            // ensure that the solution metrics are updated
-            assert(RECOMPUTE_SOL_METRICS_FREQ % SOLUTION_TRANSFER_FREQ == 0);
-            /* TODO: Check whether our partial solution's objective is good enough to be stored in the partial solutions pool. */
-            thrust::host_vector<double> sol_host = data_device.sol; /* Copy back solution. */
-
-            consoleInfo("Moving solution to partial pool");
-            auto sol = std::make_unique<Solution>();
-            sol->x.insert(sol->x.end(), sol_host.begin(), sol_host.end());
-            sol->objval = args_device.objective; // TODO recompute
-            sol->isFeas = false; // TODO only a hack
-            sol->absViolation = args_device.sum_viol; // TODO only a hack
-            sol->relViolation = sol->absViolation / model_host.maxRhs;
-
-            partials.add(std::move(sol));
-        }
+                partials.add(std::move(sol));
+            }
 
 #ifdef EXTENDED_DEBUG
-        assert(is_eq_feas(thrust::inner_product( data_device.sol.begin(),
-            data_device.sol.end(),
-            model_device.objective.begin(),0.0), args_device.objective));
+            assert(is_eq_feas(thrust::inner_product( data_device.sol.begin(),
+                data_device.sol.end(),
+                model_device.objective.begin(),0.0), args_device.objective));
 
-        /* calculate violations for equations*/
-        double aux_sol_viol = thrust::transform_reduce(
-            thrust::device,
-            data_device.slacks.begin(),
-            data_device.slacks.begin() + model_host.n_equalities,
-            [] __device__ (const double x) -> double {
-                return !is_eq_feas(x, 0) ? fabs(x) : 0.0;
-            },
-            0.0,
-            thrust::plus<double>()
-        );
+            /* calculate violations for equations*/
+            double aux_sol_viol = thrust::transform_reduce(
+                thrust::device,
+                data_device.slacks.begin(),
+                data_device.slacks.begin() + model_host.n_equalities,
+                [] __device__ (const double x) -> double {
+                    return !is_eq_feas(x, 0) ? fabs(x) : 0.0;
+                },
+                0.0,
+                thrust::plus<double>()
+            );
 
-        /* calculate violations for ineq*/
-        aux_sol_viol = thrust::transform_reduce(
-            thrust::device,
-            data_device.slacks.begin() + model_host.n_equalities,
-            data_device.slacks.end(),
-            [] __device__ (const double x) -> double {
-                return is_lt_feas(x, 0) ? fabs(x) : 0.0;
-            },
-            aux_sol_viol,
-            thrust::plus<double>()
-        );
-        assert(is_eq_feas(aux_sol_viol, args_device.sum_viol));
+            /* calculate violations for ineq*/
+            aux_sol_viol = thrust::transform_reduce(
+                thrust::device,
+                data_device.slacks.begin() + model_host.n_equalities,
+                data_device.slacks.end(),
+                [] __device__ (const double x) -> double {
+                    return is_lt_feas(x, 0) ? fabs(x) : 0.0;
+                },
+                aux_sol_viol,
+                thrust::plus<double>()
+            );
+            assert(is_eq_feas(aux_sol_viol, args_device.sum_viol));
 #endif
+        }
     }
 };
