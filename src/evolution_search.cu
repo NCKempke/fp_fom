@@ -1415,10 +1415,11 @@ void EvolutionSearch::run(MIPData &data) const {
         if (!is_relaxed_solution_copied) {
             if (data.lp_solution_ready) {
                 int cont_variables_begin = model_host.n_binaries + model_host.n_integers;
+//TODO: make a test if copy and then transform is faster than than a transform from the cpu
                 thrust::transform(
                     data.primals.begin(),
                     data.primals.begin() + cont_variables_begin,
-                    data_device.sol.begin() + model_device.ncols * 4,
+                    data_device.sol.begin() + model_device.ncols * 3,
                     [] __host__ __device__ (double x) {
                         return floor(x);
                     }
@@ -1426,11 +1427,11 @@ void EvolutionSearch::run(MIPData &data) const {
                 thrust::copy(
                     data.primals.begin() + cont_variables_begin,
                     data.primals.end(),
-                    data_device.sol.begin() + model_device.ncols * 4 + cont_variables_begin
+                    data_device.sol.begin() + model_device.ncols * 3 + cont_variables_begin
                 );
-                update_references_for_solution_index(4, data_device, model_device,
+                update_references_for_solution_index(3, data_device, model_device,
                                                      gpu_model_ptrs, tabu_tenure);
-                activate_solutions[4] = true;
+                activate_solutions[3] = true;
 
                 thrust::transform(
                     data.primals.begin(),
@@ -1443,11 +1444,11 @@ void EvolutionSearch::run(MIPData &data) const {
                 thrust::copy(
                     data.primals.begin() + cont_variables_begin,
                     data.primals.end(),
-                    data_device.sol.begin() + model_device.ncols * 3 + cont_variables_begin
+                    data_device.sol.begin() + model_device.ncols * 4 + cont_variables_begin
                 );
-                update_references_for_solution_index(3, data_device, model_device,
+                update_references_for_solution_index(4, data_device, model_device,
                                                      gpu_model_ptrs, tabu_tenure);
-                activate_solutions[3] = true;
+                activate_solutions[4] = true;
             }
             is_relaxed_solution_copied = true;
         }
