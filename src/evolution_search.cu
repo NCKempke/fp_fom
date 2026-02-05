@@ -1010,7 +1010,7 @@ __global__ void update_weights_kernel(
     }
 }
 
-__global__ void apply_move(const GpuModelPtrs model, TabuSearchKernelArgs args, single_col_move* best_move)
+__global__ void apply_move(const GpuModelPtrs &model, TabuSearchKernelArgs args, single_col_move* best_move, const double obj_chg, const double viol_chg)
 {
     const int thread_idx = threadIdx.x;
     const double val = best_move->val;
@@ -1045,6 +1045,8 @@ __global__ void apply_move(const GpuModelPtrs model, TabuSearchKernelArgs args, 
     if (thread_idx == 0) {
         args.tabu[col] = args.iter;
         args.sol[col] = val;
+        args.objective += obj_chg;
+        args.sum_viol += viol_chg;
     }
 }
 
@@ -1230,6 +1232,8 @@ void recompute_solution_metrics(TabuSearchDataDevice& data_device, TabuSearchKer
         thrust::fill(data_device.constraint_weights.begin(), data_device.constraint_weights.end(), 1);
         thrust::fill(data_device.objective_weight.begin(), data_device.objective_weight.end(), 1);
     }
+    consoleLog("Initial slack     {}", args_device.sum_viol);
+    consoleLog("Initial objective {}", args_device.objective);
 }
 
 void EvolutionSearch::run()
@@ -1296,9 +1300,6 @@ void EvolutionSearch::run()
      *
      *
      */
-
-    consoleLog("Initial slack     {}", args_device.sum_viol);
-    consoleLog("Initial objective {}", args_device.objective);
 
     for (int i_round = 0; i_round < n_rounds; ++i_round)
     {
@@ -1425,10 +1426,8 @@ void EvolutionSearch::run()
         consoleLog("(idx, move_score: (obj_change, slack_change, score)): {} ({}, {}, {})", min_index, score.objective_change, score.violation_change, score.weighted_violation_change);
 
         /* Apply best move. */
-        apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index);
+        apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index, score.objective_change, score.violation_change);
 
-        args_device.objective += score.objective_change;
-        args_device.sum_viol += score.violation_change;
 
         consoleLog("(objective, sum_viol): {} {}", args_device.objective, args_device.sum_viol);
 
