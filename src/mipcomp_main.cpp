@@ -68,7 +68,7 @@ static void writeSolToFile(const MIPInstance &mip, const std::vector<double> &so
 
 	const auto &col_map = mip.map_orig_to_new_col;
 	std::ofstream out(solFile);
-	out << fmt::format("=obj= {:.17g}", best_obj);
+	out << fmt::format("=obj= {:.17g}", best_obj) << "\n";
 	for (int icol_orig = 0; icol_orig < mip.ncols; ++icol_orig)
 	{
 		const int icol_new = col_map[icol_orig];
@@ -91,8 +91,6 @@ static void write_solutions_worker(const MIPInstance &mip, SolutionPool& sol_poo
         }
 
 		/* Check for a new solution. If none, nanosleep and continue. */
-		timing_file << fmt::format("solution_{}   {:.3g}", sol_sequence, gStopWatch().elapsed());
-
 		if (sol_pool.primalBound() < best_obj) {
 			assert(sol_pool.hasFeas());
 
@@ -107,6 +105,8 @@ static void write_solutions_worker(const MIPInstance &mip, SolutionPool& sol_poo
 
 			if (obj < best_obj) {
 				const auto solfile_name = fmt::format("solution_{}", sol_sequence);
+
+				timing_file << fmt::format("{}   {:.3f}", solfile_name, gStopWatch().elapsed()) << "\n";
 
 				writeSolToFile(mip, sol.x, obj, solfile_name);
 				best_obj = obj;
@@ -325,7 +325,7 @@ protected:
 		const double setup_time = gStopWatch().elapsed();
 		const double finish_time = setup_time + params.timeLimit;
 
-		timing_file << fmt::format("input   {:.3g}", setup_time);
+		timing_file << fmt::format("input   {:.3f}", setup_time) << "\n";
 
 		consoleInfo("Reading time = {}", setup_time);
 		consoleLog("");
