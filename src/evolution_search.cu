@@ -1294,6 +1294,7 @@ void copy_solution_to_device(const int solution_index, std::vector<double> &prim
         model.objective.begin(),
         0.0);
 
+    //TODO: reset tabu, weights (objective, constraint)
 }
 
 void EvolutionSearch::run(MIPData &data) const {
