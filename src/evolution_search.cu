@@ -41,6 +41,9 @@ constexpr int BLOCKSIZE_VECTOR_KERNEL = 1024; /* Blocksize used for vector kerne
 
 constexpr int AVAILABLE_MOVES = 6;
 
+constexpr double MAX_VALUE_FOR_HUGE_BOUNDS = 1000;
+
+
 /* For multi-armed bandit maybe. */
 using moves_probability = std::array<double, AVAILABLE_MOVES>;
 
@@ -1363,23 +1366,25 @@ void EvolutionSearch::run(MIPData &data) const {
 
 
     //2. case
-    double MAX_VALUE = 1000;
-    thrust::fill(data_device.sol.begin() + model_host.ncols, data_device.sol.begin() + model_host.ncols * 2, -MAX_VALUE);
+    thrust::fill(data_device.sol.begin() + model_host.ncols, data_device.sol.begin() + model_host.ncols * 2, -MAX_VALUE_FOR_HUGE_BOUNDS);
     thrust::transform(
-        data_device.sol.begin() + model_host.ncols , data_device.sol.begin() + model_host.ncols*2,
+        data_device.sol.begin() + model_host.ncols, data_device.sol.begin() + model_host.ncols * 2,
         model_device.lb.begin(),
-        data_device.sol.begin(),
+        data_device.sol.begin()+ model_host.ncols,
         cuda::maximum<double>()
     );
     update_references_for_solution_index(1, data_device, model_host, gpu_model_ptrs, tabu_tenure);
     activate_solutions[1] = true;
 
+    std::vector<double> sol_host(model_host.ncols);
+    thrust::copy(data_device.sol.begin() + model_host.ncols, data_device.sol.begin() + model_host.ncols *2, sol_host.begin());
+
     // 3. case
-    thrust::fill(data_device.sol.begin() + model_host.ncols, data_device.sol.begin() + model_host.ncols * 2, MAX_VALUE);
+    thrust::fill(data_device.sol.begin() + model_host.ncols * 2, data_device.sol.begin() + model_host.ncols * 3, MAX_VALUE_FOR_HUGE_BOUNDS);
     thrust::transform(
-        data_device.sol.begin() + model_host.ncols , data_device.sol.begin() + model_host.ncols*2,
+        data_device.sol.begin() + model_host.ncols * 2, data_device.sol.begin() + model_host.ncols * 3,
         model_device.ub.begin(),
-        data_device.sol.begin(),
+        data_device.sol.begin() + model_host.ncols * 2,
         cuda::minimum<double>()
     );
     update_references_for_solution_index(2, data_device, model_host, gpu_model_ptrs, tabu_tenure);
@@ -1521,6 +1526,7 @@ void EvolutionSearch::run(MIPData &data) const {
             // for ( auto &[objective, violation, weighted_violation]: host_scores) {
             //     consoleLog("{} {} {}", objective, violation, weighted_violation);
             // }
+            assert(best_scores_single_col.size() >= n_blocks_total);
 
             /* Reduce best moves to get globally best move. */
             auto max_iter = thrust::min_element(thrust::device, best_scores_single_col.begin(),
