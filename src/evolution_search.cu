@@ -1236,6 +1236,21 @@ void recompute_solution_metrics(TabuSearchDataDevice& data_device, TabuSearchKer
     consoleLog("Initial objective {}", args_device.objective);
 }
 
+void recompute_solution_violation_metrics(TabuSearchDataDevice &data_device, TabuSearchKernelArgs &args_device) {
+
+    thrust::sequence(data_device.violated_constraints.begin(), data_device.violated_constraints.end());
+
+    auto partition_point = thrust::partition(
+        thrust::device,
+        data_device.violated_constraints.begin(),
+        data_device.violated_constraints.end(),
+        IsViolated{args_device.slacks, args_device.n_equalities});
+
+    args_device.n_violated = partition_point - data_device.violated_constraints.begin();
+    consoleLog("Found {} violated constraints", args_device.n_violated);
+
+}
+
 void EvolutionSearch::run()
 {
     int seed = 0;
@@ -1310,21 +1325,15 @@ void EvolutionSearch::run()
          */
         int nmoves_total = 1e5 * AVAILABLE_MOVES;
 
-        thrust::sequence(data_device.violated_constraints.begin(), data_device.violated_constraints.end()); /* Set to 0,1,...,nrows-1. */
+        recompute_solution_violation_metrics(data_device, args_device);
 
-        auto partition_point = thrust::partition(
-            thrust::device,
-            data_device.violated_constraints.begin(),
-            data_device.violated_constraints.end(),
-            IsViolated{args_device.slacks, args_device.n_equalities});
-
-        args_device.n_violated = partition_point - data_device.violated_constraints.begin();
-        consoleLog("Found {} violated constraints", args_device.n_violated);
-
+#define EXTENDED_DEBUG
+#ifdef EXTENDED_DEBUG
         if (args_device.n_violated == 0) {
             consoleInfo("Found feasible!");
             return;
         }
+#endif
 
         /* Update the moves distribution, compute number of moves and blocks per moves kernel. This might reallocate best_scores_single_col and best_single_col_moves. Updates global seed count and assignes each kernel a unique seed. */
         const auto [blocks_per_move, config_per_move, n_blocks_total] = prepare_sample_submission(best_scores_single_col, best_single_col_moves, probabilities, seed, nmoves_total);
