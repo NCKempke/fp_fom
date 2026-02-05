@@ -1037,7 +1037,7 @@ __global__ void update_weights_kernel(
     }
 }
 
-__global__ void apply_move(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, single_col_move* best_move, const int solution_index)
+__global__ void apply_move(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, single_col_move* best_move, const int solution_index, const double objective_change, const double violation_change)
 {
     const int thread_idx = threadIdx.x;
     const double val = best_move->val;
@@ -1073,18 +1073,10 @@ __global__ void apply_move(const GpuModelPtrs &model, const TabuSearchKernelArgs
     if (thread_idx == 0) {
         args.tabu[scaled_col] = args.iter;
         args.sol[scaled_col] = val;
-    }
-}
-
-
-__global__ void update_objective_sum_viol(const TabuSearchKernelArgs &args, const double objective_change, const double violation_change, const int solution_index)
-{
-    if (const int thread_idx = threadIdx.x; thread_idx == 0) {
         args.objective[solution_index] += objective_change;
         args.sum_viol[solution_index] += violation_change;
     }
 }
-
 
 __global__ void csr_spmv_kernel(
     int nrows,
@@ -1581,13 +1573,8 @@ void EvolutionSearch::run(MIPData &data) const {
             consoleLog("[{}-sol] Taking {} move", solution_index , move_name);
             consoleLog("[{}-sol] (idx, move_score: (obj_change, slack_change, score)): {} ({}, {}, {})", solution_index, min_index, score.objective_change, score.violation_change, score.weighted_violation_change);
 
-            //TODO: merge both function
-            /* Apply best move. */
-            apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index, solution_index);
-
-            /* update the objective and violations */
-            update_objective_sum_viol<<<1, 1014>>>(args_device, score.objective_change, score.violation_change, solution_index);
-
+            /* Apply best move.  update also objective and violation*/
+            apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index, solution_index, score.objective_change, score.violation_change);
 
 #define DEBUG
 #ifdef DEBUG
