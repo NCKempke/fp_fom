@@ -58,7 +58,7 @@ static void fpr_worker (MIPData& mip_data, MIPModelPtr lp, const std::vector<std
     if (params.maxNodes == -1)
         params.maxNodes = std::max(params.minNodes, state.mipdata.mip.ncols + 1);
 
-    consoleLog("Starting thread\n");
+    consoleLog("Starting FPR thread\n");
 
     while (!should_stop.load(std::memory_order_relaxed)) {
         if (gStopWatch().elapsed() >= deadline) {

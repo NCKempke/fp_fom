@@ -1097,6 +1097,33 @@ __global__ void csr_spmv_kernel(
     y[linear_index] += alpha * row_sum;
 }
 
+__global__ void csr_spmv_kernel_index(
+    int nrows,
+    int ncols,
+    int solution_index,
+    const GpuModelPtrs model,
+    double *__restrict__ sol,
+    double alpha,
+    double *__restrict__ y) {
+    const int row = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row >= nrows) return;
+
+    const int scaled_row = row + solution_index * nrows;
+    double row_sum = 0.0;
+
+    const int inz_start = model.row_ptr[row];
+    const int inz_end = model.row_ptr[row + 1];
+
+    for (int inz = inz_start; inz < inz_end; ++inz) {
+        const int scaled_col = model.col_idx[inz] +  solution_index * ncols;
+        row_sum += model.row_val[inz] * sol[scaled_col];
+    }
+
+    y[scaled_row] += alpha * row_sum;
+}
+
+
 double thrust_dot_product(const thrust::device_vector<double> &a,
                           const thrust::device_vector<double> &b)
 {
@@ -1218,7 +1245,48 @@ std::tuple<std::array<int, AVAILABLE_MOVES>, std::array<move_config, AVAILABLE_M
     return {blocks_per_move, config_per_move, n_blocks_total};
 }
 
-void EvolutionSearch::run() const {
+void copy_solution_to_device(int solution_index, std::vector<double> &primal, TabuSearchDataDevice &data_device,
+                             GpuModel& model, const GpuModelPtrs &model_ptrs) {
+    thrust::copy(
+        primal.begin(),
+        primal.end(),
+        data_device.sol.begin() + model.ncols * solution_index
+    );
+    thrust::copy(model.rhs.begin(), model.rhs.end(),
+                 data_device.slacks.begin() + solution_index * model.nrows);
+    csr_spmv_kernel_index<<<512, 1024>>>(model.nrows, model.ncols, solution_index, model_ptrs, thrust::raw_pointer_cast(data_device.sol.data()), -1.0,
+                thrust::raw_pointer_cast(data_device.slacks.data()));
+
+    //TODO move this too to device
+    double sum_viol = 0;
+        for (int irow = 0; irow < model.nrows; ++irow)
+        {
+            FP_ASSERT(model_ptrs.row_sense[irow] == 'L' || model_ptrs.row_sense[irow] == 'E');
+
+            const int scaled_row = irow + solution_index * model.nrows;
+            const double slack_row = data_device.slacks[scaled_row];
+
+            if (model_ptrs.row_sense[irow] == 'L' && is_lt_feas(slack_row, 0))
+            {
+                sum_viol += fabs(slack_row);
+            }
+            if (model_ptrs.row_sense[irow] == 'E' && !is_eq_feas(slack_row, 0))
+            {
+                sum_viol += fabs(slack_row);
+            }
+        }
+
+    data_device.sum_viol[solution_index] = sum_viol;
+
+    data_device.objective[solution_index] = thrust::inner_product(
+        data_device.sol.begin() + solution_index * model.ncols,
+        data_device.sol.begin() + (solution_index + 1) * model.ncols,
+        model.objective.begin(),
+        0.0);
+
+}
+
+void EvolutionSearch::run(MIPData &data) const {
     int seed = 0;
 
     /* For smoothing decision. */
@@ -1237,11 +1305,11 @@ void EvolutionSearch::run() const {
         probabilities[i] = w;
     probabilities[static_cast<int>(move_type::random)] = 0.0;
 
-    int n_solutions = 3;
+    int max_solutions = 3;
     auto gpu_model_ptrs = model_device.get_ptrs();
 
 
-    TabuSearchDataDevice data_device(model_host.nrows, model_host.ncols, tabu_tenure, n_solutions);
+    TabuSearchDataDevice data_device(model_host.nrows, model_host.ncols, tabu_tenure, max_solutions);
 
     //initiliaze the solution vector with 3 solutions
     // 1. the zero vector within variable bounds
@@ -1275,17 +1343,18 @@ void EvolutionSearch::run() const {
     TabuSearchKernelArgs args_device(data_device, model_host.nrows, model_host.ncols, tabu_tenure);
 
     // calculate slack and sum_viol
-    assert(data_device.slacks.size() == n_solutions * model_host.nrows);
+    assert(data_device.slacks.size() == max_solutions * model_host.nrows);
     // calculate slack and sum_slack
-    for (int i =0; i < n_solutions; ++i) {
-        thrust::copy(model_device.rhs.begin(), model_device.rhs.end(), data_device.slacks.begin() + i * model_host.nrows);
+    for (int i = 0; i < max_solutions; ++i) {
+        thrust::copy(model_device.rhs.begin(), model_device.rhs.end(),
+                     data_device.slacks.begin() + i * model_host.nrows);
     }
-    csr_spmv_kernel<<<512, 1024>>>(model_device.nrows, model_device.ncols, n_solutions, gpu_model_ptrs, thrust::raw_pointer_cast(data_device.sol.data()), -1.0,
+    csr_spmv_kernel<<<512, 1024>>>(model_device.nrows, model_device.ncols, max_solutions, gpu_model_ptrs, thrust::raw_pointer_cast(data_device.sol.data()), -1.0,
                 thrust::raw_pointer_cast(data_device.slacks.data()));
 
     //TODO move this too to device
     std::vector<double> host_sum_viol (3,0);
-    for (int solution_index =0; solution_index < n_solutions; ++solution_index) {
+    for (int solution_index =0; solution_index < max_solutions; ++solution_index) {
         for (int irow = 0; irow < model_host.nrows; ++irow)
         {
             FP_ASSERT(model_host.sense[irow] == 'L' || model_host.sense[irow] == 'E');
@@ -1305,9 +1374,9 @@ void EvolutionSearch::run() const {
     }
     thrust::copy(host_sum_viol.begin(), host_sum_viol.end(), data_device.sum_viol.begin());
 
-    assert(data_device.sol.size() == n_solutions * model_host.ncols);
-    std::vector<double> obj (3,0);
-    for (int i = 0; i < n_solutions; ++i) {
+    assert(data_device.sol.size() == max_solutions * model_host.ncols);
+    std::vector<double> obj (max_solutions,0);
+    for (int i = 0; i < max_solutions; ++i) {
         obj[i] = thrust::inner_product(
             data_device.sol.begin() + i * model_host.ncols, data_device.sol.begin() + (i + 1) * model_host.ncols,
             model_device.objective.begin(),
@@ -1340,12 +1409,12 @@ void EvolutionSearch::run() const {
     // TODO: sort ints and bins/extract them. Many moves only make sense for ints and bins!
 
     consoleLogNoLineBreak("Initial slack [\t");
-    for (int i= 0; i < n_solutions; ++i) {
+    for (int i= 0; i < max_solutions; ++i) {
         consoleLogNoLineBreak("{},", host_sum_viol[i]);
     };
     consoleLog("]");
     consoleLogNoLineBreak("Initial objective [\t");
-    for (int i= 0; i < n_solutions; ++i) {
+    for (int i= 0; i < max_solutions; ++i) {
         consoleLogNoLineBreak("{},", obj[i]);
     };
     consoleLog("]");
@@ -1359,11 +1428,11 @@ void EvolutionSearch::run() const {
          */
         int nmoves_total = 1e5 * AVAILABLE_MOVES;
 
-        for (int i= 0 ; i < n_solutions; ++i)
+        for (int i= 0 ; i < max_solutions; ++i)
             thrust::sequence(data_device.violated_constraints.begin() + i * model_host.nrows, data_device.violated_constraints.begin() + (i+1) * model_host.nrows); /* Set to 0,1,...,nrows-1. */
 
-        std::vector<int> n_violated_host (n_solutions, 0);
-        for (int i = 0; i < n_solutions; ++i) {
+        std::vector<int> n_violated_host (max_solutions, 0);
+        for (int i = 0; i < max_solutions; ++i) {
             auto start_index = data_device.violated_constraints.begin() + i * model_host.nrows;
             auto partition_point = thrust::partition(
                 thrust::device,
@@ -1374,16 +1443,18 @@ void EvolutionSearch::run() const {
             consoleLog("Found {} violated constraints", n_violated_host[i]);
         }
 
+        //TODO: update the sum_viol and objective to avoid divergence due to numerics
+
         thrust::copy(n_violated_host.begin(), n_violated_host.end(), data_device.n_violated.begin());
-        //TODO: AH @ NP we have enough time, I think we want to continue to improve the solution?
-        for (int i = 0; i < n_solutions; ++i)
+        //TODO: this is just currently for debugging to be removed later
+        for (int i = 0; i < max_solutions; ++i)
             if (n_violated_host[i] == 0) {
                 consoleInfo("Found feasible!");
                 return;
             }
-        for (int solution_index = 0; solution_index < n_solutions; ++solution_index) {
+        for (int solution_index = 0; solution_index < max_solutions; ++solution_index) {
             /* Update the moves distribution, compute number of moves and blocks per moves kernel. This might reallocate best_scores_single_col and best_single_col_moves. Updates global seed count and assignes each kernel a unique seed. */
-            //TODO: make this solution dynamic
+            //TODO: make this dynamic for each solution
             const auto [blocks_per_move, config_per_move, n_blocks_total] = prepare_sample_submission(
                 best_scores_single_col, best_single_col_moves, probabilities, seed, nmoves_total);
 

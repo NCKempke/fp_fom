@@ -302,7 +302,7 @@ protected:
 
 		consoleInfo("Running evo search");
 		EvolutionSearch evo_search(mip, gpu_data);
-		evo_search.run();
+		evo_search.run(*mip_data);
 
 		// TODO: now, check the pool for new incumbents and write these out + write the timing file. Also, check for the finished root LP thread. Either start one more FPR or resolve the root LP to higher accuracy? Though this messes with GPU ..
 		// TODO: Communicate stop if the threads do not stop themselves!

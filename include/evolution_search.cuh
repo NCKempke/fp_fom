@@ -1,4 +1,5 @@
 #pragma once
+#include "mip.h"
 
 class MIPInstance;
 class GpuModel;
@@ -15,5 +16,5 @@ public:
 
     EvolutionSearch(const MIPInstance& model_host_, const GpuModel& model_device_) : model_host(model_host_), model_device(model_device_) {};
 
-    void run() const;
+    void run(MIPData &data) const;
 };
