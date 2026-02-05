@@ -1469,7 +1469,31 @@ void EvolutionSearch::run()
         assert(is_eq_feas(thrust::inner_product( data_device.sol.begin(),
             data_device.sol.end(),
             model_device.objective.begin(),0.0), args_device.objective));
-        //TODO: add here asserts that the violations (sum_slacks) are equal to the updated
+
+        /* calculate violations for equations*/
+        double aux_sol_viol = thrust::transform_reduce(
+            thrust::device,
+            data_device.slacks.begin(),
+            data_device.slacks.begin() + model_host.n_equalities,
+            [] __device__ (const double x) -> double {
+                return !is_eq_feas(x, 0) ? fabs(x) : 0.0;
+            },
+            0.0,
+            thrust::plus<double>()
+        );
+
+        /* calculate violations for ineq*/
+        aux_sol_viol = thrust::transform_reduce(
+            thrust::device,
+            data_device.slacks.begin() + model_host.n_equalities,
+            data_device.slacks.end(),
+            [] __device__ (const double x) -> double {
+                return is_lt_feas(x, 0) ? fabs(x) : 0.0;
+            },
+            aux_sol_viol,
+            thrust::plus<double>()
+        );
+        assert(is_eq_feas(aux_sol_viol, args_device.sum_viol));
 #endif
     }
 };
