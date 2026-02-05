@@ -15,7 +15,9 @@ GpuModel::GpuModel(const MIPInstance& mip) {
 
 #ifndef NDEBUG
     for (int icol = 0; icol < mip.ncols; ++icol) {
-        FP_ASSERT_IFF(mip.is_integer[icol], mip.xtype[icol] == 'B' || mip.xtype[icol] == 'I');
+        FP_ASSERT_IF_THEN(mip.xtype[icol] == 'B', icol < mip.n_binaries);
+        FP_ASSERT_IF_THEN(mip.xtype[icol] == 'I', mip.n_binaries <= icol && icol < mip.n_binaries + mip.n_integers);
+        FP_ASSERT_IF_THEN(mip.xtype[icol] == 'C', mip.n_binaries + mip.n_integers <= icol);
     }
 #endif
 
@@ -35,8 +37,9 @@ GpuModel::GpuModel(const MIPInstance& mip) {
 
 #ifndef NDEBUG
     for (int irow = 0; irow < mip.nrows; ++irow) {
-        FP_ASSERT_IFF(mip.is_equality[irow], mip.sense[irow] == 'E');
         FP_ASSERT(mip.sense[irow] == 'E' || mip.sense[irow] == 'L');
+        FP_ASSERT_IF_THEN(mip.sense[irow] == 'E', irow < mip.n_equalities);
+        FP_ASSERT_IF_THEN(mip.sense[irow] == 'L', mip.n_equalities <= irow);
     }
 #endif
 

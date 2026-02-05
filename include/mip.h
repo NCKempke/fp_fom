@@ -33,27 +33,35 @@
 /* MIP instance data */
 struct MIPInstance
 {
+	/* Columns are stored [binaries, integers, continuous]. */
 	int ncols = 0;
+	int n_binaries = 0;
+	int n_integers = 0;
+
+	/* Rows are stored [equalities, inequalities]. */
 	int nrows = 0;
+	int n_equalities = 0;
 	double maxRhs = 0.0;
 	// obj
 	double objSense = 1.0;
 	double objOffset = 0.0;
+
+	/* Column data. */
 	std::vector<double> obj;
-	// col data
 	std::vector<char> xtype;
-	std::vector<bool> is_integer;
 	std::vector<double> lb;
 	std::vector<double> ub;
+
 	SparseMatrix cols;
 	// row data
-	std::vector<bool> is_equality;
 	std::vector<char> sense;
 	std::vector<double> rhs;
 	SparseMatrix rows;
 	// names (for debugging and output)
 	std::vector<std::string> rNames;
 	std::vector<std::string> cNames;
+	/* Inverse column permutation for solution output; maps orig_col -> col. */
+	std::vector<int> map_orig_to_new_col;
 };
 
 /* Extract instance data from a MIP model */
