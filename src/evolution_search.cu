@@ -387,12 +387,12 @@ __device__ move_score compute_score_single_col_move_warp(const GpuModelPtrs &mod
         const double slack_old = args.slacks[scaled_row_idx];
         const double slack_new = slack_old - coef * delta;
 
-        double viol_old = is_eq * fabs(slack_old) + (1 - is_eq) * fmax(0.0, -slack_old);
-        double viol_new = is_eq * fabs(slack_new) + (1 - is_eq) * fmax(0.0, -slack_new);
+        const double viol_old = is_eq * fabs(slack_old) + (1 - is_eq) * fmax(0.0, -slack_old);
+        const double viol_new = is_eq * fabs(slack_new) + (1 - is_eq) * fmax(0.0, -slack_new);
 
-        viol_change_thread += (viol_new - viol_old);
+        viol_change_thread += viol_new - viol_old;
 
-        bool feas_before = is_zero_feas(viol_old);
+        const bool feas_before = is_zero_feas(viol_old);
         bool feas_after = is_zero_feas(viol_new);
 
         /* If the constraint became feasible, we subtract 1 * weight or 2 * weight, if it became infeasible, we add 1 * weight or 2 * weight.
@@ -1258,13 +1258,9 @@ std::tuple<std::array<int, AVAILABLE_MOVES>, std::array<move_config, AVAILABLE_M
     return {blocks_per_move, config_per_move, n_blocks_total};
 }
 
-void copy_solution_to_device(const int solution_index, std::vector<double> &primal, TabuSearchDataDevice &data_device,
-                             const GpuModel& model, const GpuModelPtrs &model_ptrs) {
-    thrust::copy(
-        primal.begin(),
-        primal.end(),
-        data_device.sol.begin() + model.ncols * solution_index
-    );
+void update_references_for_solution_index(const int solution_index, TabuSearchDataDevice &data_device,
+                             const GpuModel& model, const GpuModelPtrs &model_ptrs, const int tabu_tenure) {
+
     thrust::copy(model.rhs.begin(), model.rhs.end(),
                  data_device.slacks.begin() + solution_index * model.nrows);
     csr_spmv_kernel_index<<<512, 1024>>>(model.nrows, model.ncols, solution_index, model_ptrs,
@@ -1293,8 +1289,28 @@ void copy_solution_to_device(const int solution_index, std::vector<double> &prim
         data_device.sol.begin() + (solution_index + 1) * model.ncols,
         model.objective.begin(),
         0.0);
+    thrust::fill(data_device.tabu.begin(), data_device.tabu.end(), -tabu_tenure);
+    thrust::fill(data_device.constraint_weights.begin(), data_device.constraint_weights.end(), 1);
+    thrust::fill(data_device.objective_weight.begin(), data_device.objective_weight.end(), 1);
+    //TODO: how to handle n_violated and violated constraints currently they are calcluated every round
 
-    //TODO: reset tabu, weights (objective, constraint)
+    consoleLog("Initial slack {} \t initial objective {}\t for solution at pos {}", data_device.sum_viol[solution_index], data_device.objective[solution_index], solution_index);
+
+}
+
+void update_violated_constraints(const int solution_index, TabuSearchDataDevice& data_device, TabuSearchKernelArgs &args,
+                                 const GpuModel &model) {
+    thrust::sequence(data_device.violated_constraints.begin() + solution_index * model.nrows,
+                     data_device.violated_constraints.begin() + (solution_index + 1) * model.nrows);
+
+    auto start_index = data_device.violated_constraints.begin() + solution_index * model.nrows;
+    auto partition_point = thrust::partition(
+        thrust::device,
+        start_index,
+        data_device.violated_constraints.begin() + (solution_index + 1) * model.nrows,
+        IsViolated{args.slacks + solution_index * model.nrows, args.n_equalities});
+    data_device.n_violated[solution_index] = partition_point - start_index;
+    consoleLog("Found {} violated constraints for index {}", data_device.n_violated[solution_index], solution_index);
 }
 
 void EvolutionSearch::run(MIPData &data) const {
@@ -1316,17 +1332,19 @@ void EvolutionSearch::run(MIPData &data) const {
         probabilities[i] = w;
     probabilities[static_cast<int>(move_type::random)] = 0.0;
 
-    int max_solutions = 3;
+    int max_solutions = 5;
     auto gpu_model_ptrs = model_device.get_ptrs();
-
+    std::vector<bool> activate_solutions (max_solutions, false);
 
     TabuSearchDataDevice data_device(model_host.nrows, model_host.ncols, tabu_tenure, max_solutions);
+    TabuSearchKernelArgs args_device(data_device, model_host, tabu_tenure);
 
-    //initiliaze the solution vector with 3 solutions
+    //initialize the solution vector with 3 solutions
     // 1. the zero vector within variable bounds
     // 2. the lower bounds
     // 3. the upper bounds
-    thrust::fill(data_device.sol.begin(), data_device.sol.end(), 0.0);
+    // 1. case
+    thrust::fill(data_device.sol.begin(), data_device.sol.begin() + model_host.ncols, 0.0);
     thrust::transform(
         data_device.sol.begin(), data_device.sol.begin() + model_host.ncols,
         model_device.lb.begin(),
@@ -1340,58 +1358,33 @@ void EvolutionSearch::run(MIPData &data) const {
         cuda::minimum<double>()
     );
 
-    thrust::copy(
-        model_host.lb.begin(),
-        model_host.lb.end(),
-        data_device.sol.begin() + model_host.ncols
+    update_references_for_solution_index(0, data_device, model_host, gpu_model_ptrs, tabu_tenure);
+    activate_solutions[0] = true;
+
+
+    //2. case
+    double MAX_VALUE = 1000;
+    thrust::fill(data_device.sol.begin() + model_host.ncols, data_device.sol.begin() + model_host.ncols * 2, -MAX_VALUE);
+    thrust::transform(
+        data_device.sol.begin() + model_host.ncols , data_device.sol.begin() + model_host.ncols*2,
+        model_device.lb.begin(),
+        data_device.sol.begin(),
+        cuda::maximum<double>()
     );
-    thrust::copy(
-        model_host.ub.begin(),
-        model_host.ub.end(),
-        data_device.sol.begin() + model_host.ncols * 2
+    update_references_for_solution_index(1, data_device, model_host, gpu_model_ptrs, tabu_tenure);
+    activate_solutions[1] = true;
+
+    // 3. case
+    thrust::fill(data_device.sol.begin() + model_host.ncols, data_device.sol.begin() + model_host.ncols * 2, MAX_VALUE);
+    thrust::transform(
+        data_device.sol.begin() + model_host.ncols , data_device.sol.begin() + model_host.ncols*2,
+        model_device.ub.begin(),
+        data_device.sol.begin(),
+        cuda::minimum<double>()
     );
+    update_references_for_solution_index(2, data_device, model_host, gpu_model_ptrs, tabu_tenure);
+    activate_solutions[2] = true;
 
-    TabuSearchKernelArgs args_device(data_device, model_host, tabu_tenure);
-
-    // calculate slack and sum_viol
-    assert(data_device.slacks.size() == max_solutions * model_host.nrows);
-    // calculate slack and sum_slack
-    for (int i = 0; i < max_solutions; ++i) {
-        thrust::copy(model_device.rhs.begin(), model_device.rhs.end(),
-                     data_device.slacks.begin() + i * model_host.nrows);
-    }
-    csr_spmv_kernel<<<512, 1024>>>(model_device.nrows, model_device.ncols, max_solutions, gpu_model_ptrs, thrust::raw_pointer_cast(data_device.sol.data()), -1.0,
-                thrust::raw_pointer_cast(data_device.slacks.data()));
-
-    //TODO move this too to device
-    std::vector<double> host_sum_viol(max_solutions, 0);
-    for (int solution_index = 0; solution_index < max_solutions; ++solution_index) {
-        for (int irow = 0; irow < model_host.nrows; ++irow) {
-            const int scaled_row = irow + solution_index * model_host.nrows;
-            const double slack_row = data_device.slacks[scaled_row];
-
-            // first equalities than inequalities
-            if (irow < model_host.n_equalities) {
-                if (!is_eq_feas(slack_row, 0))
-                    host_sum_viol[solution_index] += fabs(slack_row);
-            } else {
-                if (is_lt_feas(slack_row, 0))
-                    host_sum_viol[solution_index] += fabs(slack_row);
-            }
-        }
-    }
-
-    thrust::copy(host_sum_viol.begin(), host_sum_viol.end(), data_device.sum_viol.begin());
-
-    assert(data_device.sol.size() == max_solutions * model_host.ncols);
-    std::vector<double> obj (max_solutions,0);
-    for (int i = 0; i < max_solutions; ++i) {
-        obj[i] = thrust::inner_product(
-            data_device.sol.begin() + i * model_host.ncols, data_device.sol.begin() + (i + 1) * model_host.ncols,
-            model_device.objective.begin(),
-            0.0);
-    }
-    thrust::copy(obj.begin(), obj.end(), data_device.objective.begin());
 
     consoleInfo("Starting evolution search on GPU");
 
@@ -1415,17 +1408,6 @@ void EvolutionSearch::run(MIPData &data) const {
      *
      */
 
-    consoleLogNoLineBreak("Initial slack [\t");
-    for (int i= 0; i < max_solutions; ++i) {
-        consoleLogNoLineBreak("{},", host_sum_viol[i]);
-    };
-    consoleLog("]");
-    consoleLogNoLineBreak("Initial objective [\t");
-    for (int i= 0; i < max_solutions; ++i) {
-        consoleLogNoLineBreak("{},", obj[i]);
-    };
-    consoleLog("]");
-
     bool is_relaxed_solution_copied = false;
     for (int i_round = 0; i_round < n_rounds; ++i_round)
     {
@@ -1434,7 +1416,40 @@ void EvolutionSearch::run(MIPData &data) const {
         if (!is_relaxed_solution_copied) {
             if (data.lp_solution_ready) {
                 //TODO round: primals
-                copy_solution_to_device(max_solutions - 1, data.primals, data_device, model_device, gpu_model_ptrs);
+                int cont_variables_begin = model_host.n_binaries + model_host.n_integers;
+                thrust::transform(
+                    data.primals.begin(),
+                    data.primals.begin() + cont_variables_begin,
+                    data_device.sol.begin() + model_device.ncols * 4,
+                    [] __host__ __device__ (double x) {
+                        return floor(x);
+                    }
+                );
+                thrust::copy(
+                    data.primals.begin() + cont_variables_begin,
+                    data.primals.end(),
+                    data_device.sol.begin() + model_device.ncols * 4 + cont_variables_begin
+                );
+                update_references_for_solution_index(4, data_device, model_device,
+                                                     gpu_model_ptrs, tabu_tenure);
+                activate_solutions[4] = true;
+
+                thrust::transform(
+                    data.primals.begin(),
+                    data.primals.begin() + cont_variables_begin,
+                    data_device.sol.begin() + model_device.ncols * 5,
+                    [] __host__ __device__ (double x) {
+                        return ceil(x);
+                    }
+                );
+                thrust::copy(
+                    data.primals.begin() + cont_variables_begin,
+                    data.primals.end(),
+                    data_device.sol.begin() + model_device.ncols * 3 + cont_variables_begin
+                );
+                update_references_for_solution_index(3, data_device, model_device,
+                                                     gpu_model_ptrs, tabu_tenure);
+                activate_solutions[3] = true;
             }
             is_relaxed_solution_copied = true;
         }
@@ -1444,31 +1459,21 @@ void EvolutionSearch::run(MIPData &data) const {
          */
         int nmoves_total = 1e5 * AVAILABLE_MOVES;
 
-        for (int i= 0 ; i < max_solutions; ++i)
-            thrust::sequence(data_device.violated_constraints.begin() + i * model_host.nrows, data_device.violated_constraints.begin() + (i+1) * model_host.nrows); /* Set to 0,1,...,nrows-1. */
 
-        std::vector<int> n_violated_host (max_solutions, 0);
-        for (int i = 0; i < max_solutions; ++i) {
-            auto start_index = data_device.violated_constraints.begin() + i * model_host.nrows;
-            auto partition_point = thrust::partition(
-                thrust::device,
-                start_index,
-                data_device.violated_constraints.begin() + (i + 1) * model_host.nrows,
-                IsViolated{args_device.slacks + i * model_host.nrows, args_device.n_equalities});
-            n_violated_host[i] = partition_point - start_index;
-            consoleLog("Found {} violated constraints", n_violated_host[i]);
-        }
+        for (int solution_index = 0; solution_index < max_solutions; ++solution_index) {
+            if (!activate_solutions[solution_index])
+                continue;
+            //TODO: update the sum_viol and objective to avoid divergence due to numerics
 
-        //TODO: update the sum_viol and objective to avoid divergence due to numerics
+            update_violated_constraints(solution_index, data_device, args_device, model_host);
 
-        thrust::copy(n_violated_host.begin(), n_violated_host.end(), data_device.n_violated.begin());
-        //TODO: this is just currently for debugging to be removed later
-        for (int i = 0; i < max_solutions; ++i)
-            if (n_violated_host[i] == 0) {
+
+            //TODO: this is just currently for debugging to be removed later
+            if (data_device.n_violated[solution_index] == 0) {
                 consoleInfo("Found feasible!");
                 return;
             }
-        for (int solution_index = 0; solution_index < max_solutions; ++solution_index) {
+
             /* Update the moves distribution, compute number of moves and blocks per moves kernel. This might reallocate best_scores_single_col and best_single_col_moves. Updates global seed count and assignes each kernel a unique seed. */
             //TODO: make this dynamic for each solution
             const auto [blocks_per_move, config_per_move, n_blocks_total] = prepare_sample_submission(
