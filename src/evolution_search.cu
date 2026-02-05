@@ -1045,8 +1045,7 @@ __global__ void apply_move(const GpuModelPtrs &model, TabuSearchKernelArgs args,
     if (thread_idx == 0) {
         args.tabu[col] = args.iter;
         args.sol[col] = val;
-        args.objective += obj_chg;
-        args.sum_viol += viol_chg;
+
     }
 }
 
@@ -1437,6 +1436,8 @@ void EvolutionSearch::run()
         /* Apply best move. */
         apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index, score.objective_change, score.violation_change);
 
+        args_device.objective += score.objective_change;
+        args_device.sum_viol += score.violation_change;
 
         consoleLog("(objective, sum_viol): {} {}", args_device.objective, args_device.sum_viol);
 
@@ -1455,5 +1456,15 @@ void EvolutionSearch::run()
 
             partials.add(std::move(sol));
         }
+
+#ifdef EXTENDED_DEBUG
+        auto inner_product = thrust::inner_product( data_device.sol.begin(),
+                                 data_device.sol.end(),
+                                 model_device.objective.begin(),0.0);
+        assert(is_eq_feas(thrust::inner_product( data_device.sol.begin(),
+            data_device.sol.end(),
+            model_device.objective.begin(),0.0), args_device.objective));
+        //TODO: add here asserts that the violations (sum_slacks) are equal to the updated
+#endif
     }
 };
