@@ -30,6 +30,8 @@
  * blocks.
  */
 constexpr int BLOCKSIZE_MOVE = 256;
+
+constexpr int LP_SOLUTION_FREQ = 1000;
 constexpr int SOLUTION_TRANSFER_FREQ = 1000;
 constexpr int RECOMPUTE_SOL_METRICS_FREQ = SOLUTION_TRANSFER_FREQ / 10;
 
@@ -1253,7 +1255,7 @@ void recompute_solution_violation_metrics(TabuSearchDataDevice &data_device, Tab
 
 }
 
-void EvolutionSearch::run()
+void EvolutionSearch::run(MIPData &data)
 {
     int seed = 0;
 
@@ -1337,9 +1339,15 @@ void EvolutionSearch::run()
      *
      */
 
+    bool lp_solution_loaded = false;
     for (int i_round = 0; i_round < n_rounds; ++i_round)
     {
         args_device.iter = i_round;
+
+        if ( i_round % LP_SOLUTION_FREQ == 0 && !lp_solution_loaded) {
+            //TODO: load LP solution
+            lp_solution_loaded = true;
+        }
 
         /* Each kernel and block get assigned as this rounds random seed:
          * i_rounds * (MOVES * BLOCKS) + BLOCKS * i_move + i_block
