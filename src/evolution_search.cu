@@ -177,13 +177,21 @@ int blocks_for_samples(int n_samples_for_type) {
  * TODO:
  * - swap             : select two (binary) variables with different values and swap them
  * - Lagrange         : from Feaspump
+ * - TSP swap?        : swaps 4 binaries I think.
  *
- * - TSP swap?
- * - Avoid duplicate moves!
+ * - Avoid duplicate moves:
+ *    -- random moves only for integers and continuous columns
+ *    -- one_opt (either) only for integers and continuous columns
+ *    -- flip only for binary columns
+ *    -- mtm_satisfied only for integers and continuous within the constraint
+ *    -- mtm_unsatisfied only for integers and continuous within the constraint
  *
  * - Solution pool;
- * - Sync solutions from FPR;
- * - Scoring function;
+ * - Sync solutions from/to global solution pool;
+ * - Scoring function:
+ *    -- secondary score from Local-MIP?
+ * - Mutate solutions in pool after n rounds
+ * - use cuda graph to submit 100-ish rounds at once
  */
 
 struct single_col_move
