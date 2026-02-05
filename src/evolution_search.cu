@@ -1413,7 +1413,6 @@ void EvolutionSearch::run(MIPData &data) const {
 
         if (!is_relaxed_solution_copied) {
             if (data.lp_solution_ready) {
-                //TODO round: primals
                 int cont_variables_begin = model_host.n_binaries + model_host.n_integers;
                 thrust::transform(
                     data.primals.begin(),
