@@ -25,6 +25,7 @@
 #include "version.h"
 
 #include <consolelog.h>
+#include <chrono>
 #include <fileconfig.h>
 #include <path.h>
 #include <str_utils.h>
@@ -53,6 +54,84 @@
 #endif
 
 static const unsigned int MIN_NUMBER_OF_INPUTS = 1;
+
+static void writeSolToFile(const MIPInstance &mip, const std::vector<double> &sol, double best_obj, const std::string& filename)
+{
+	if (sol.empty())
+	{
+		consoleLog("No solution found");
+		return;
+	}
+
+	std::string solFile = filename + ".sol";
+	consoleLog("Writing feasible solution to {}...", solFile);
+
+	const auto &col_map = mip.map_orig_to_new_col;
+	std::ofstream out(solFile);
+	out << fmt::format("=obj= {:.17g}", best_obj) << "\n";
+	for (int icol_orig = 0; icol_orig < mip.ncols; ++icol_orig)
+	{
+		const int icol_new = col_map[icol_orig];
+
+		out << fmt::format("{} {:.17g}", mip.cNames[icol_new], sol[icol_new]) << "\n";
+	}
+	consoleLog("Done");
+}
+
+static void write_solutions_worker(const MIPInstance &mip, SolutionPool& sol_pool, std::ofstream& timing_file, double deadline, std::atomic<bool>& should_stop) {
+	int sol_sequence = 1;
+	double best_obj = INFTY;
+
+    consoleLog("Starting writer thread\n");
+
+    while (!should_stop.load(std::memory_order_relaxed)) {
+        if (gStopWatch().elapsed() >= deadline) {
+            consoleLog("Deadline hit at {} >= {}", gStopWatch().elapsed(), deadline);
+            break;
+        }
+
+		/* Check for a new solution. If none, nanosleep and continue. */
+		if (sol_pool.primalBound() < best_obj) {
+			assert(sol_pool.hasFeas());
+
+			const auto& sol = sol_pool.getIncumbent();
+
+			/* Recompute the objective for violations sake. */
+			double obj = mip.objOffset;
+
+			for (int icol = 0; icol < mip.ncols; ++icol) {
+				obj += mip.obj[icol] * sol.x[icol];
+			}
+
+			if (obj < best_obj) {
+				const auto solfile_name = fmt::format("solution_{}", sol_sequence);
+
+				timing_file << fmt::format("{}   {:.3f}", solfile_name, gStopWatch().elapsed()) << "\n";
+
+				writeSolToFile(mip, sol.x, obj, solfile_name);
+				best_obj = obj;
+				++sol_sequence;
+			}
+		} else {
+			/* Do not run continuously to not block the solution pool. */
+		    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+		}
+	}
+}
+
+/* Submit one solution writer thread. The thread iteratively polls the solution pool and, when a new incumbent is found, writes it to file. */
+static std::unique_ptr<std::atomic<bool>> submit_solution_writer(MIPData& mip_data, ThreadPool& thread_pool, std::ofstream& timing_file, double deadline) {
+	consoleInfo("Submitting solution writer thread with deadline {}, current time is {}", deadline, gStopWatch().elapsed());
+	std::unique_ptr<std::atomic<bool>> flag = std::make_unique<std::atomic<bool>>(false);
+
+	auto& flag_ref = *(flag); /* reference to this worker’s flag; to not pass flag as a reference */
+
+	thread_pool.enqueue([&, deadline]{
+		write_solutions_worker(mip_data.mip, mip_data.solpool, timing_file, deadline, flag_ref);
+	});
+
+	return flag;
+}
 
 /* Submit n fix-and-propagate workers continuously attempting to run some fix and propagate. Return's a vector of n_workers stop flags that can be used to cancel a worker. */
 static std::vector<std::unique_ptr<std::atomic<bool>>> submit_fpr_workers(MIPData& mip_data, ThreadPool& thread_pool, const std::vector<std::pair<RankerType, ValueChooserType>>& strategies, std::atomic<size_t>& global_counter, const double deadline, int n_workers, const Params& params)
@@ -135,29 +214,6 @@ protected:
 			return false;
 		}
 		return true;
-	}
-
-	void writeSolToFile(const MIPInstance &mip, const std::vector<double> &sol, double best_obj)
-	{
-		if (sol.empty())
-		{
-			consoleLog("No solution found");
-			return;
-		}
-
-		std::string solFile = getProbName(args.input[0]) + ".sol";
-		consoleLog("Writing feasible solution to {}...", solFile);
-
-		const auto &col_map = mip.map_orig_to_new_col;
-		std::ofstream out(solFile);
-		out << fmt::format("=obj= {:.17g}", best_obj);
-		for (int icol_orig = 0; icol_orig < mip.ncols; ++icol_orig)
-		{
-			const int icol_new = col_map[icol_orig];
-
-			out << fmt::format("{} {:.17g}", mip.cNames[icol_new], sol[icol_new]) << "\n";
-		}
-		consoleLog("Done");
 	}
 
 	MIPModelPtr make_lp_solver(const MIPInstance& mip)
@@ -257,13 +313,21 @@ protected:
 	void exec() override {
 		gStopWatch();
 
+		/* Open the timing file. */
+		std::ofstream timing_file("timing.log");
+
 		/* First, read the parameters and setup the MIP competition settings. */
 		// TODO: also initialize the GPU here; check the number of SMs etc.
 		auto mip_data = read_config_and_problem();
 		const MIPInstance &mip = mip_data->mip;
 
-		// TODO: write input to timing file here.
-		consoleInfo("Reading time = {}", gStopWatch().lap());
+		/* Done with reading, write input line to timing file. */
+		const double setup_time = gStopWatch().elapsed();
+		const double finish_time = setup_time + params.timeLimit;
+
+		timing_file << fmt::format("input   {:.3f}", setup_time) << "\n";
+
+		consoleInfo("Reading time = {}", setup_time);
 		consoleLog("");
 		consoleLog("Problem:  #rows={} #cols={} #nnz={}", mip.nrows, mip.ncols, mip.rows.val.size());
 		consoleLog("");
@@ -273,7 +337,9 @@ protected:
 		/* We run this thread + params.threads - 1 threads. */
 		ThreadPool thread_pool(params.threads - 1);
 		std::atomic<size_t> fpr_counter(0);
-		std::vector<std::unique_ptr<std::atomic<bool>>> worker_flags;
+
+		/* Launch the solution writer thread. */
+		std::unique_ptr<std::atomic<bool>> writer_flag = submit_solution_writer(*mip_data, thread_pool, timing_file, finish_time);
 
 		/* Vector containing all FPR strategies we want to run repeatedly. The worker threads iterate this queue and, until timeout, try each strategy (changing the random seed each time/the lp solution can get updated). TODO: extend this! */
 
@@ -286,7 +352,7 @@ protected:
 			{RankerType::TYPE, ValueChooserType::RANDOM_LP}
 		};
 
-		worker_flags = submit_fpr_workers(*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, gStopWatch().elapsed() + 300, 5, params);
+		std::vector<std::unique_ptr<std::atomic<bool>>> worker_flags = submit_fpr_workers(*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, finish_time, 5, params);
 
 		/* We run in parallel: The root LP using PDLP, 6 CPU fix-and-propagate threads, 1 thread running the GPU evolution search.
 		 *
@@ -323,19 +389,8 @@ protected:
 			(*flag).store(true);
 		}
 
+		(*writer_flag).store(true);
 		thread_pool.wait();
-
-		// TODO: make this thread write solutions to file in parallel.
-		if (params.writeSol) {
-			if (mip_data->solpool.hasFeas()) {
-				consoleInfo("Writing best found solution");
-				auto best_sol = mip_data->solpool.getIncumbent();
-
-				writeSolToFile(mip_data->mip, best_sol.x, best_sol.objval);
-			} else {
-				consoleInfo("Did not find feasible solution; cannot write best sol");
-			}
-		}
 
 		/* Final information displayed on command line. */
 		mip_data->solpool.print();
