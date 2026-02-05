@@ -1436,7 +1436,7 @@ void EvolutionSearch::run(MIPData &data) const {
                 thrust::transform(
                     data.primals.begin(),
                     data.primals.begin() + cont_variables_begin,
-                    data_device.sol.begin() + model_device.ncols * 5,
+                    data_device.sol.begin() + model_device.ncols * 4,
                     [] __host__ __device__ (double x) {
                         return ceil(x);
                     }
@@ -1465,9 +1465,9 @@ void EvolutionSearch::run(MIPData &data) const {
             if (!activate_solutions[solution_index])
                 continue;
 
-            if (i_round != 0 && i_round % UPDATE_FREQUENCE == 0) {
-                update_references_for_solution_index(solution_index, data_device, model_device, gpu_model_ptrs, tabu_tenure, false);
-            }
+            // if (i_round != 0 && i_round % UPDATE_FREQUENCE == 0) {
+            //     update_references_for_solution_index(solution_index, data_device, model_device, gpu_model_ptrs, tabu_tenure, false);
+            // }
             update_violated_constraints(solution_index, data_device, args_device, model_host);
 #define EXTENDED_DEBUG
 #ifdef EXTENDED_DEBUG
