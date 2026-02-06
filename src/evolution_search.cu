@@ -1255,6 +1255,48 @@ void recompute_solution_violation_metrics(TabuSearchDataDevice &data_device, Tab
 
 }
 
+void load_initial_solutions(
+    const int solution_index,
+    const double init_value,
+    const bool restrict_to_lb,
+    const bool restrict_to_ub,
+    std::vector<TabuSearchDataDevice>& data_devices,
+    std::vector<TabuSearchKernelArgs>& args_devices,
+    const GpuModel& model_device,
+    std::vector<bool>& active_solutions,
+    const GpuModelPtrs& device_model_ptrs,
+    const int n_equalities,
+    const int tabu_tenure
+) {
+    assert(!active_solutions[solution_index]);
+
+    // initialize
+    thrust::fill(data_devices[solution_index].sol.begin(), data_devices[solution_index].sol.end(), init_value);
+
+    // clamp with lower bound if needed
+    if (restrict_to_lb) {
+        thrust::transform(
+            data_devices[solution_index].sol.begin(), data_devices[solution_index].sol.end(),
+            model_device.lb.begin(),
+            data_devices[solution_index].sol.begin(),
+            cuda::maximum<double>()
+        );
+    }
+
+    // clamp with upper bound if needed
+    if (restrict_to_ub) {
+        thrust::transform(
+            data_devices[solution_index].sol.begin(), data_devices[solution_index].sol.end(),
+            model_device.ub.begin(),
+            data_devices[solution_index].sol.begin(),
+            cuda::minimum<double>()
+        );
+    }
+    recompute_solution_metrics(data_devices[solution_index], args_devices[solution_index], device_model_ptrs, model_device,
+                               n_equalities, tabu_tenure, solution_index, true);
+    active_solutions[solution_index] = true;
+}
+
 template<typename RoundOp>
 void load_lp_solution(
     const int idx,
@@ -1340,48 +1382,9 @@ void EvolutionSearch::run(MIPData &data) {
         args_devices.emplace_back(data_devices[i], model_host, tabu_tenure);
     }
 
-    // Construct the first solution
-    thrust::fill(data_devices[0].sol.begin(), data_devices[0].sol.end(), 0.0);
-    thrust::transform(
-            data_devices[0].sol.begin(), data_devices[0].sol.end(),
-            model_device.lb.begin(),
-            data_devices[0].sol.begin(),
-            cuda::maximum<double>()
-        );
-    thrust::transform(
-        data_devices[0].sol.begin(), data_devices[0].sol.end(),
-        model_device.ub.begin(),
-        data_devices[0].sol.begin(),
-        cuda::minimum<double>()
-    );
-    active_solutions[0] = true;
-
-
-    // Construct the second solution - set all values to lb capped to -MAX_VALUE_HUGE
-    thrust::fill(data_devices[1].sol.begin(), data_devices[1].sol.end(), -MAX_VALUE_HUGE);
-    thrust::transform(
-            data_devices[1].sol.begin(), data_devices[1].sol.end(),
-            model_device.lb.begin(),
-            data_devices[1].sol.begin(),
-            cuda::maximum<double>()
-        );
-    active_solutions[1] = true;
-
-
-    // Construct the third solution - set all values to ub capped to MAX_VALUE_HUGE
-    thrust::fill(data_devices[2].sol.begin(), data_devices[2].sol.end(), MAX_VALUE_HUGE);
-    thrust::transform(
-            data_devices[2].sol.begin(), data_devices[2].sol.end(),
-            model_device.ub.begin(),
-            data_devices[2].sol.begin(),
-            cuda::minimum<double>()
-        );
-    active_solutions[2] = true;
-
-    for (int i = 0; i < max_solutions; ++i)
-        if (active_solutions[i])
-            recompute_solution_metrics(data_devices[i], args_devices[i], gpu_model_ptrs, model_device,
-                                       model_host.n_equalities, tabu_tenure, i, true);
+    load_initial_solutions(0, 0.0, true, true, data_devices, args_devices, model_device, active_solutions, gpu_model_ptrs, model_host.n_equalities, tabu_tenure);
+    load_initial_solutions(1, -MAX_VALUE_HUGE, true, false, data_devices,args_devices, model_device, active_solutions, gpu_model_ptrs, model_host.n_equalities, tabu_tenure);
+    load_initial_solutions(2, MAX_VALUE_HUGE, false, true, data_devices, args_devices, model_device, active_solutions, gpu_model_ptrs, model_host.n_equalities, tabu_tenure);
 
 #define EXTENDED_DEBUG
 
@@ -1421,8 +1424,6 @@ void EvolutionSearch::run(MIPData &data) {
      *             -> kernel_ALNS
      *        - GPU-reduce best moves and apply/CPU reduce best moves + apply
      * }
-     *
-     *
      */
 
     bool lp_solution_loaded = false;
