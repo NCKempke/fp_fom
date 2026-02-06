@@ -1440,11 +1440,12 @@ void EvolutionSearch::run(MIPData &data) {
 
         if (i_round % SOLUTION_IMPORT_FREQ) {
             auto& solution_pool = data.solpool;
-            consoleLog("loading best solution from solution pool");
             //TODO: add more logic to load
             if (solution_pool.hasFeas() && !active_solutions[5]) {
+                consoleLog("loading best solution from solution pool");
                 load_primal_solution(5, solution_pool.getIncumbent().x, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure);
                 assert(args_devices[5].sum_viol == 0);
+                args_devices[5].is_found_feasible = true;
             }
         }
 
