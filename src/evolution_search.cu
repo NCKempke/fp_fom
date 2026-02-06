@@ -311,6 +311,8 @@ struct TabuSearchKernelArgs
 
     double *constraint_weights;
     double *objective_weight;
+
+    //TODO: these two variables are not ever updated
     bool is_found_feasible = false;
     double best_objective;
 
@@ -1281,6 +1283,27 @@ void load_lp_solution(
         model_host.n_equalities, tabu_tenure,idx,true );
 }
 
+void load_primal_solution(
+    const int idx,
+    const std::vector<double> &sol,
+    std::vector<TabuSearchDataDevice> &data_devices,
+    std::vector<TabuSearchKernelArgs> &args_devices,
+    std::vector<bool> &active_solutions,
+    const GpuModelPtrs &gpu_model_ptrs,
+    const GpuModel &model_device,
+    const MIPInstance &model_host,
+    const int tabu_tenure
+) {
+    assert(!active_solutions[idx]);
+
+    thrust::copy(sol.begin(),sol.end(),data_devices[idx].sol.begin() );
+
+    active_solutions[idx] = true;
+
+    recompute_solution_metrics(data_devices[idx],args_devices[idx],gpu_model_ptrs,model_device,
+        model_host.n_equalities, tabu_tenure,idx,true );
+}
+
 void EvolutionSearch::run(MIPData &data) {
     int seed = 0;
 
@@ -1414,11 +1437,15 @@ void EvolutionSearch::run(MIPData &data) {
         }
 
         if (i_round % SOLUTION_IMPORT_FREQ) {
-            //TODO: import solution from solution pool
+            // auto& solution_pool = data.solpool;
+            // consoleLog("Solution Pool");
+            // if (solution_pool.hasFeas()) {
+            //     load_primal_solution(5, solution_pool.getIncumbent().x, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure);
+            // }
         }
 
 
-        for (int solution_index=0; solution_index< max_solutions; ++solution_index)
+        for (int solution_index = 0; solution_index < max_solutions; ++solution_index)
         {
             if (!active_solutions[solution_index])
                 continue;
@@ -1435,6 +1462,8 @@ void EvolutionSearch::run(MIPData &data) {
 
 #ifdef EXTENDED_DEBUG
             if (args_device.n_violated == 0) {
+                double objective = args_device.objective;
+                // data.solpool.add()
                 consoleInfo("\tSol{} : Found feasible!", solution_index);
                 return;
             }
