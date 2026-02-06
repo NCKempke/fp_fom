@@ -776,7 +776,7 @@ __global__ void compute_random_moves_kernel(const GpuModelPtrs model, TabuSearch
 /* On exit, best_scores and best oneopt move (greedy or feasible) contain for each block the best move and score found by the block. Consequently, best_scores and best_oneopt_moves need to be larger than the grid dimension.
 TODO: specialize for n_moves >= n_cols */
 template <const bool GREEDY>
-__global__ void compute_oneopt_moves_kernel(const GpuModelPtrs model, const TabuSearchKernelArgs& args, move_config config)
+__global__ void compute_oneopt_moves_kernel(const GpuModelPtrs model, const TabuSearchKernelArgs args, move_config config)
 {
     const int thread_idx = threadIdx.x;
     const int warp_id = thread_idx / WARP_SIZE;
@@ -826,7 +826,7 @@ __global__ void compute_oneopt_moves_kernel(const GpuModelPtrs model, const Tabu
     reduce_and_offload_best_score_in_block(best_score, best_move, config);
 }
 
-__global__ void compute_flip_moves_kernel(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, move_config config)
+__global__ void compute_flip_moves_kernel(const GpuModelPtrs model, const TabuSearchKernelArgs args, move_config config)
 {
     const int thread_idx = threadIdx.x;
     const int warp_id = thread_idx / WARP_SIZE;
@@ -876,7 +876,7 @@ __global__ void compute_flip_moves_kernel(const GpuModelPtrs &model, const TabuS
     reduce_and_offload_best_score_in_block(best_score, best_move, config);
 }
 
-__global__ void compute_mtm_sat_moves_kernel(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, move_config config)
+__global__ void compute_mtm_sat_moves_kernel(const GpuModelPtrs model, const TabuSearchKernelArgs args, move_config config)
 {
     const int thread_idx = threadIdx.x;
     const int warp_id = thread_idx / WARP_SIZE;
@@ -924,7 +924,7 @@ __global__ void compute_mtm_sat_moves_kernel(const GpuModelPtrs &model, const Ta
     reduce_and_offload_best_score_in_block(best_score, best_move, config);
 }
 
-__global__ void compute_mtm_unsat_moves_kernel(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, move_config config)
+__global__ void compute_mtm_unsat_moves_kernel(const GpuModelPtrs model, const TabuSearchKernelArgs args, move_config config)
 {
     const int thread_idx = threadIdx.x;
     const int warp_id = thread_idx / WARP_SIZE;
@@ -972,7 +972,7 @@ __global__ void compute_mtm_unsat_moves_kernel(const GpuModelPtrs &model, const 
 }
 
 template <const bool SMOOTHING>
-__global__ void update_weights_kernel(const TabuSearchKernelArgs& args)
+__global__ void update_weights_kernel(const TabuSearchKernelArgs args)
 {
     const int row_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -1008,7 +1008,7 @@ __global__ void update_weights_kernel(const TabuSearchKernelArgs& args)
     }
 }
 
-__global__ void apply_move(const GpuModelPtrs &model, const TabuSearchKernelArgs &args, const single_col_move* best_move, const double obj_chg, const double viol_chg)
+__global__ void apply_move(const GpuModelPtrs model, const TabuSearchKernelArgs args, const single_col_move* best_move, const double obj_chg, const double viol_chg)
 {
     const int thread_idx = threadIdx.x;
     const double val = best_move->val;
@@ -1379,9 +1379,6 @@ void EvolutionSearch::run(MIPData &data) {
             // for ( int i = 0; i < args_device.n_violated; i++) {
             //     consoleLog("Index: {}",data_device.violated_constraints[i]);
             //
-
-            move_score* best_scores_single_col_ptr = thrust::raw_pointer_cast(best_scores_single_col.data());
-            single_col_move* best_single_col_moves_ptr = thrust::raw_pointer_cast(best_single_col_moves.data());
 
             if (blocks_per_move[0] > 0) {
                 compute_random_moves_kernel<<<blocks_per_move[0], BLOCKSIZE_MOVE>>>(
