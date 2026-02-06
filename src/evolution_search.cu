@@ -1438,11 +1438,13 @@ void EvolutionSearch::run(MIPData &data) {
         }
 
         if (i_round % SOLUTION_IMPORT_FREQ) {
-            // auto& solution_pool = data.solpool;
-            // consoleLog("Solution Pool");
-            // if (solution_pool.hasFeas()) {
-            //     load_primal_solution(5, solution_pool.getIncumbent().x, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure);
-            // }
+            auto& solution_pool = data.solpool;
+            consoleLog("loading best solution from solution pool");
+            //TODO: add more logic to load
+            if (solution_pool.hasFeas() && !active_solutions[5]) {
+                load_primal_solution(5, solution_pool.getIncumbent().x, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure);
+                assert(args_devices[5].sum_viol == 0);
+            }
         }
 
 
@@ -1462,9 +1464,8 @@ void EvolutionSearch::run(MIPData &data) {
             recompute_solution_violation_metrics(data_device, args_device, solution_index);
 
 #ifdef EXTENDED_DEBUG
-            if (args_device.n_violated == 0) {
+            if (args_device.n_violated == 0 && solution_index <= 4) {
                 double objective = args_device.objective;
-                // data.solpool.add()
                 consoleInfo("\tSol{} : Found feasible!", solution_index);
                 return;
             }
