@@ -1573,12 +1573,20 @@ void EvolutionSearch::run(MIPData &data) {
             args_device.objective += score.objective_change;
             args_device.sum_viol += score.violation_change;
 
+            //TODO: check if the conclusion is correct. checkin on exactly 0 is correct, since if the constraint is with feas tol it is resetted to 0
+            bool solution_turned_feasible = args_device.sum_viol == 0;
+            bool is_incumbent = solution_turned_feasible && (!data.solpool.hasFeas() || is_lt_feas(args_device.objective, data.solpool.primalBound()));
+
             consoleLog("\tSol{} : updated information (objective, sum_viol): {} {}", solution_index, args_device.objective, args_device.sum_viol);
 
-            if (i_round > 0 && i_round % RECOMPUTE_SOL_METRICS_FREQ == 0) {
+            // enforce recalculation if incumbent is found or after certain rounds
+            if (is_incumbent || (i_round > 0 && i_round % RECOMPUTE_SOL_METRICS_FREQ == 0)) {
                 recompute_solution_metrics(data_device, args_device, gpu_model_ptrs, model_device, model_host.n_equalities, tabu_tenure, solution_index, false);
             }
-
+            if ( is_incumbent) {
+                //TODO: add solution to pool
+                consoleLog("\tSol{} turned feasible!");
+            }
             // TODO: make 100 a #define
             if (i_round > 0 && i_round % SOLUTION_TRANSFER_FREQ == 0) {
                 // ensure that the solution metrics are updated
