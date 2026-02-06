@@ -33,6 +33,7 @@ constexpr int BLOCKSIZE_MOVE = 256;
 
 constexpr int LP_SOLUTION_FREQ = 1000;
 constexpr int SOLUTION_TRANSFER_FREQ = 1000;
+constexpr int MAX_VALUE_HUGE = 1000;
 constexpr int RECOMPUTE_SOL_METRICS_FREQ = SOLUTION_TRANSFER_FREQ / 10;
 
 constexpr int N_WARPS_PER_BLOCK = BLOCKSIZE_MOVE / WARP_SIZE;
@@ -1008,7 +1009,8 @@ __global__ void update_weights_kernel(const TabuSearchKernelArgs args)
     }
 }
 
-__global__ void apply_move(const GpuModelPtrs model, const TabuSearchKernelArgs args, const single_col_move* best_move, const double obj_chg, const double viol_chg)
+__global__ void apply_move(const GpuModelPtrs model, const TabuSearchKernelArgs args, const single_col_move *best_move,
+                           const double obj_chg, const double viol_chg, int solution_index)
 {
     const int thread_idx = threadIdx.x;
     const double val = best_move->val;
@@ -1020,10 +1022,10 @@ __global__ void apply_move(const GpuModelPtrs model, const TabuSearchKernelArgs 
     assert_if_then(col < args.n_binaries + args.n_integers, is_integer(val));
     assert(!is_eq(old_val, val));
 
-    if (thread_idx == 0)
-    {
-        printf("Applying move jcol %d [%g, %g], cost %g : %g -> %g\n", col, model.lb[col], model.ub[col], obj, old_val, val);
-    }
+    // if (thread_idx == 0)
+    // {
+    //     printf("\tSol{} : Applying move jcol %d [%g, %g], cost %g : %g -> %g\n", solution_index, col, model.lb[col], model.ub[col], obj, old_val, val);
+    // }
 
     assert(!is_tabu(args.tabu, col, args.iter, args.tabu_tenure));
 
@@ -1191,7 +1193,9 @@ std::tuple<std::array<int, AVAILABLE_MOVES>, std::array<move_config, AVAILABLE_M
     return {blocks_per_move, config_per_move, n_blocks_total};
 }
 
-void recompute_solution_metrics(TabuSearchDataDevice& data_device, TabuSearchKernelArgs& args_device, const GpuModelPtrs& gpu_model_ptrs, const GpuModel& model_device, const int n_equalities, int tabu_tenure, bool reset = false) {
+void recompute_solution_metrics(TabuSearchDataDevice &data_device, TabuSearchKernelArgs &args_device,
+                                const GpuModelPtrs &gpu_model_ptrs, const GpuModel &model_device,
+                                const int n_equalities, int tabu_tenure, int solution_index, bool reset = false) {
 
     /* calculate slack */
     thrust::copy(model_device.rhs.begin(), model_device.rhs.end(), data_device.slacks.begin());
@@ -1229,11 +1233,10 @@ void recompute_solution_metrics(TabuSearchDataDevice& data_device, TabuSearchKer
         thrust::fill(data_device.constraint_weights.begin(), data_device.constraint_weights.end(), 1);
         thrust::fill(data_device.objective_weight.begin(), data_device.objective_weight.end(), 1);
     }
-    consoleLog("Initial slack     {}", args_device.sum_viol);
-    consoleLog("Initial objective {}", args_device.objective);
+    consoleLog("\tSol{} : Initial solution metrics viol: {} obj {}", solution_index, args_device.sum_viol, args_device.objective);
 }
 
-void recompute_solution_violation_metrics(TabuSearchDataDevice &data_device, TabuSearchKernelArgs &args_device) {
+void recompute_solution_violation_metrics(TabuSearchDataDevice &data_device, TabuSearchKernelArgs &args_device, int solution_index) {
 
     thrust::sequence(data_device.violated_constraints.begin(), data_device.violated_constraints.end());
 
@@ -1244,7 +1247,7 @@ void recompute_solution_violation_metrics(TabuSearchDataDevice &data_device, Tab
         IsViolated{args_device.slacks, args_device.n_equalities});
 
     args_device.n_violated = partition_point - data_device.violated_constraints.begin();
-    consoleLog("Found {} violated constraints", args_device.n_violated);
+    consoleLog("\tSol{} : has {} violated constraints", solution_index, args_device.n_violated);
 
 }
 
@@ -1278,29 +1281,54 @@ void EvolutionSearch::run(MIPData &data) {
     std::vector<TabuSearchKernelArgs> args_devices;
     args_devices.reserve(max_solutions);
 
+    for (int i = 0; i < max_solutions; ++i) {
+        data_devices.emplace_back(model_host.nrows, model_host.ncols, tabu_tenure);
+        args_devices.emplace_back(data_devices[i], model_host, tabu_tenure);
+    }
+
     // Construct the first solution
-    data_devices.emplace_back(model_host.nrows, model_host.ncols, tabu_tenure);
-    args_devices.emplace_back(data_devices[0], model_host, tabu_tenure);
-    active_solutions[0] = true;
-
     thrust::fill(data_devices[0].sol.begin(), data_devices[0].sol.end(), 0.0);
-
     thrust::transform(
-        data_devices[0].sol.begin(), data_devices[0].sol.end(),
-        model_device.lb.begin(),
-        data_devices[0].sol.begin(),
-        cuda::maximum<double>()
-    );
+            data_devices[0].sol.begin(), data_devices[0].sol.end(),
+            model_device.lb.begin(),
+            data_devices[0].sol.begin(),
+            cuda::maximum<double>()
+        );
     thrust::transform(
         data_devices[0].sol.begin(), data_devices[0].sol.end(),
         model_device.ub.begin(),
         data_devices[0].sol.begin(),
         cuda::minimum<double>()
     );
+    active_solutions[0] = true;
 
-    // TabuSearchKernelArgs args_device(data_device_0, model_host, tabu_tenure);
 
-    recompute_solution_metrics(data_devices[0], args_devices[0], gpu_model_ptrs, model_device, model_host.n_equalities, tabu_tenure);
+    // Construct the second solution - set all values to lb capped to -MAX_VALUE_HUGE
+    thrust::fill(data_devices[1].sol.begin(), data_devices[1].sol.end(), -MAX_VALUE_HUGE);
+    thrust::transform(
+            data_devices[1].sol.begin(), data_devices[1].sol.end(),
+            model_device.lb.begin(),
+            data_devices[1].sol.begin(),
+            cuda::maximum<double>()
+        );
+    active_solutions[1] = true;
+
+
+    // Construct the third solution - set all values to ub capped to MAX_VALUE_HUGE
+    thrust::fill(data_devices[2].sol.begin(), data_devices[2].sol.end(), MAX_VALUE_HUGE);
+    thrust::transform(
+            data_devices[2].sol.begin(), data_devices[2].sol.end(),
+            model_device.ub.begin(),
+            data_devices[2].sol.begin(),
+            cuda::minimum<double>()
+        );
+    active_solutions[2] = true;
+
+    for (int i = 0; i < max_solutions; ++i)
+        if (active_solutions[i])
+            recompute_solution_metrics(data_devices[i], args_devices[i], gpu_model_ptrs, model_device,
+                                       model_host.n_equalities, tabu_tenure, i, true);
+
 #define EXTENDED_DEBUG
 
 // #ifdef EXTENDED_DEBUG
@@ -1345,16 +1373,39 @@ void EvolutionSearch::run(MIPData &data) {
 
     bool lp_solution_loaded = false;
     for (int i_round = 0; i_round < n_rounds; ++i_round) {
-        if ( i_round % LP_SOLUTION_FREQ == 0 && !lp_solution_loaded) {
-            //TODO: load LP solution
+        if ( !lp_solution_loaded && i_round % LP_SOLUTION_FREQ == 0 ) {
+            // thrust::copy(data.primals.begin(), data.primals.end(), data_devices[3].sol.begin());
+            // thrust::transform(
+            //     data_devices[3].sol.begin(),
+            //     data_devices[3].sol.end(),
+            //     data_devices[3].sol.end(),
+            //     [] __host__ __device__ (double x) {
+            //         return floor(x);
+            //     }
+            // );
+            // active_solutions[3] = true;
+            // recompute_solution_metrics(data_devices[3], args_devices[3], gpu_model_ptrs, model_device,
+            //                model_host.n_equalities, tabu_tenure, 3, true);
+            // thrust::copy(data.primals.begin(), data.primals.end(), data_devices[4].sol.begin());
+            // thrust::transform(
+            //     data_devices[4].sol.begin(),
+            //     data_devices[4].sol.end(),
+            //     data_devices[4].sol.end(),
+            //     [] __host__ __device__ (double x) {
+            //         return ceil(x);
+            //     }
+            // );
+            // active_solutions[4] = true;
+            // recompute_solution_metrics(data_devices[4], args_devices[4], gpu_model_ptrs, model_device,
+            //    model_host.n_equalities, tabu_tenure, 4, true);
             lp_solution_loaded = true;
         }
         for (int solution_index=0; solution_index< max_solutions; ++solution_index)
         {
             if (!active_solutions[solution_index])
                 continue;
-            auto& args_device = args_devices[0];
-            auto& data_device = data_devices[0];
+            auto& args_device = args_devices[solution_index];
+            auto& data_device = data_devices[solution_index];
             args_device.iter = i_round;
 
 
@@ -1364,11 +1415,11 @@ void EvolutionSearch::run(MIPData &data) {
              */
             int nmoves_total = 1e5 * AVAILABLE_MOVES;
 
-            recompute_solution_violation_metrics(data_device, args_device);
+            recompute_solution_violation_metrics(data_device, args_device, solution_index);
 
 #ifdef EXTENDED_DEBUG
             if (args_device.n_violated == 0) {
-                consoleInfo("Found feasible!");
+                consoleInfo("\tSol{} : Found feasible!", solution_index);
                 return;
             }
 #endif
@@ -1428,7 +1479,7 @@ void EvolutionSearch::run(MIPData &data) {
             move_score score = (*max_iter); // Hidden copy GPU -> CPU
 
             if (score.weighted_violation_change >= 0.0) {
-                consoleLog("No more good moves; updating weights!");
+                consoleLog("\tSol{} : No more good moves; updating weights!", solution_index);
                 const int n_blocks = (model_host.nrows + BLOCKSIZE_VECTOR_KERNEL - 1) / BLOCKSIZE_VECTOR_KERNEL;
 
                 /* Update the weigths and continue!  */
@@ -1449,7 +1500,7 @@ void EvolutionSearch::run(MIPData &data) {
             int offset_flip = offset_oneopt_greedy + blocks_per_move[2];
             int offset_mtm_unsat = offset_flip + blocks_per_move[3];
             int offset_mtm_sat = offset_mtm_unsat + blocks_per_move[4];
-
+#ifdef EXTENDED_DEBUG
             std::string move_name;
             if (min_index >= offset_mtm_sat)
                 move_name = "mtm_sat";
@@ -1466,19 +1517,21 @@ void EvolutionSearch::run(MIPData &data) {
             else
                 move_name = "unknown";
 
-            consoleLog("Taking {} move", move_name);
-            consoleLog("(idx, move_score: (obj_change, slack_change, score)): {} ({}, {}, {})", min_index, score.objective_change, score.violation_change, score.weighted_violation_change);
-
+            consoleLog("\tSol{} : Taking {} move (obj_change, slack_change, score)): ({}, {}, {})", solution_index,
+                       move_name, score.objective_change, score.violation_change, score.weighted_violation_change);
+#endif
             /* Apply best move. */
-            apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device, thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index, score.objective_change, score.violation_change);
+            apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device,
+                                    thrust::raw_pointer_cast(best_single_col_moves.data()) + min_index,
+                                    score.objective_change, score.violation_change, solution_index);
 
             args_device.objective += score.objective_change;
             args_device.sum_viol += score.violation_change;
 
-            consoleLog("(objective, sum_viol): {} {}", args_device.objective, args_device.sum_viol);
+            consoleLog("\tSol{} : updated information (objective, sum_viol): {} {}", solution_index, args_device.objective, args_device.sum_viol);
 
             if (i_round > 0 && i_round % RECOMPUTE_SOL_METRICS_FREQ == 0) {
-                recompute_solution_metrics(data_device, args_device, gpu_model_ptrs, model_device, model_host.n_equalities, tabu_tenure);
+                recompute_solution_metrics(data_device, args_device, gpu_model_ptrs, model_device, model_host.n_equalities, tabu_tenure, solution_index, false);
             }
 
             // TODO: make 100 a #define
@@ -1488,7 +1541,7 @@ void EvolutionSearch::run(MIPData &data) {
                 /* TODO: Check whether our partial solution's objective is good enough to be stored in the partial solutions pool. */
                 thrust::host_vector<double> sol_host = data_device.sol; /* Copy back solution. */
 
-                consoleInfo("Moving solution to partial pool");
+                consoleInfo("\tSol{} : Moving solution to partial pool", solution_index);
                 auto sol = std::make_unique<Solution>();
                 sol->x.insert(sol->x.end(), sol_host.begin(), sol_host.end());
                 sol->objval = args_device.objective; // TODO recompute
