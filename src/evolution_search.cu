@@ -1347,6 +1347,44 @@ void load_primal_solution(
         model_host.n_equalities, tabu_tenure,idx,true );
 }
 
+void launch_move_kernels_to_stream(
+    const std::array<int, AVAILABLE_MOVES>& blocks_per_move,
+    const std::array<move_config, AVAILABLE_MOVES>& config_per_move,
+    const GpuModelPtrs& gpu_model_ptrs,
+    const TabuSearchKernelArgs& args_device)
+{
+    if (blocks_per_move[0] > 0) {
+        compute_random_moves_kernel<<<blocks_per_move[0], BLOCKSIZE_MOVE>>>(
+            gpu_model_ptrs, args_device, config_per_move[0]);
+    }
+
+    if (blocks_per_move[1] > 0) {
+        compute_oneopt_moves_kernel<false><<<blocks_per_move[1], BLOCKSIZE_MOVE>>>(
+            gpu_model_ptrs, args_device, config_per_move[1]);
+    }
+
+    if (blocks_per_move[2] > 0) {
+        compute_oneopt_moves_kernel<true><<<blocks_per_move[2], BLOCKSIZE_MOVE>>>(
+            gpu_model_ptrs, args_device, config_per_move[2]);
+    }
+
+    if (blocks_per_move[3] > 0) {
+        compute_flip_moves_kernel<<<blocks_per_move[3], BLOCKSIZE_MOVE>>>(
+            gpu_model_ptrs, args_device, config_per_move[3]);
+    }
+
+    if (blocks_per_move[4] > 0) {
+        compute_mtm_unsat_moves_kernel<<<blocks_per_move[4], BLOCKSIZE_MOVE>>>(
+            gpu_model_ptrs, args_device, config_per_move[4]);
+    }
+
+    if (blocks_per_move[5] > 0) {
+        compute_mtm_sat_moves_kernel<<<blocks_per_move[5], BLOCKSIZE_MOVE>>>(
+            gpu_model_ptrs, args_device, config_per_move[5]);
+    }
+}
+
+
 void EvolutionSearch::run(MIPData &data) {
     int seed = 0;
 
@@ -1480,35 +1518,7 @@ void EvolutionSearch::run(MIPData &data) {
             //     consoleLog("Index: {}",data_device.violated_constraints[i]);
             //
 
-            if (blocks_per_move[0] > 0) {
-                compute_random_moves_kernel<<<blocks_per_move[0], BLOCKSIZE_MOVE>>>(
-                    gpu_model_ptrs, args_device, config_per_move[0]);
-            }
-
-            if (blocks_per_move[1] > 0) {
-                compute_oneopt_moves_kernel<false><<<blocks_per_move[1], BLOCKSIZE_MOVE>>>(
-                    gpu_model_ptrs, args_device, config_per_move[1]);
-            }
-
-            if (blocks_per_move[2] > 0) {
-                compute_oneopt_moves_kernel<true><<<blocks_per_move[2], BLOCKSIZE_MOVE>>>(
-                    gpu_model_ptrs, args_device, config_per_move[2]);
-            }
-
-            if (blocks_per_move[3] > 0) {
-                compute_flip_moves_kernel<<<blocks_per_move[3], BLOCKSIZE_MOVE>>>(
-                    gpu_model_ptrs, args_device, config_per_move[3]);
-            }
-
-            if (blocks_per_move[4] > 0) {
-                compute_mtm_unsat_moves_kernel<<<blocks_per_move[4], BLOCKSIZE_MOVE>>>(
-                    gpu_model_ptrs, args_device, config_per_move[4]);
-            }
-
-            if (blocks_per_move[5] > 0) {
-                compute_mtm_sat_moves_kernel<<<blocks_per_move[5], BLOCKSIZE_MOVE>>>(
-                    gpu_model_ptrs, args_device, config_per_move[5]);
-            }
+            launch_move_kernels_to_stream(blocks_per_move, config_per_move, gpu_model_ptrs, args_device);
 
             // /* ----- */
             // thrust::host_vector<move_score> host_scores = best_scores_single_col;
