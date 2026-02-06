@@ -33,6 +33,7 @@ constexpr int BLOCKSIZE_MOVE = 256;
 
 constexpr int LP_SOLUTION_FREQ = 1000;
 constexpr int SOLUTION_TRANSFER_FREQ = 1000;
+constexpr int SOLUTION_IMPORT_FREQ = 1000;
 constexpr int MAX_VALUE_HUGE = 1000;
 constexpr int RECOMPUTE_SOL_METRICS_FREQ = SOLUTION_TRANSFER_FREQ / 10;
 
@@ -1412,6 +1413,10 @@ void EvolutionSearch::run(MIPData &data) {
             lp_solution_loaded = true;
         }
 
+        if (i_round % SOLUTION_IMPORT_FREQ) {
+            //TODO: import solution from solution pool
+        }
+
 
         for (int solution_index=0; solution_index< max_solutions; ++solution_index)
         {
@@ -1493,7 +1498,7 @@ void EvolutionSearch::run(MIPData &data) {
                 consoleLog("\tSol{} : No more good moves; updating weights!", solution_index);
                 const int n_blocks = (model_host.nrows + BLOCKSIZE_VECTOR_KERNEL - 1) / BLOCKSIZE_VECTOR_KERNEL;
 
-                /* Update the weigths and continue!  */
+                /* Update the weights and continue!  */
                 if (dist(gen) < smooth_prob)
                     update_weights_kernel<true><<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(args_device);
                 else
