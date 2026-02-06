@@ -1003,6 +1003,7 @@ __global__ void update_weights_kernel(const TabuSearchKernelArgs args)
         }
     }
 
+    //TODO: this is always false
     // Special handling for objective (when feasible found)
     if (row_idx == 0 && args.is_found_feasible) {
         if (args.n_violated == 0) {
