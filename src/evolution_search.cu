@@ -1251,6 +1251,35 @@ void recompute_solution_violation_metrics(TabuSearchDataDevice &data_device, Tab
 
 }
 
+template<typename RoundOp>
+void load_lp_solution(
+    const int idx,
+    const MIPData &data,
+    std::vector<TabuSearchDataDevice> &data_devices,
+    std::vector<TabuSearchKernelArgs> &args_devices,
+    std::vector<bool> &active_solutions,
+    const GpuModelPtrs &gpu_model_ptrs,
+    const GpuModel &model_device,
+    const MIPInstance &model_host,
+    const int tabu_tenure,
+    RoundOp round_op
+) {
+    assert(!active_solutions[idx]);
+
+    thrust::copy(data.primals.begin(),data.primals.end(),data_devices[idx].sol.begin() );
+
+    thrust::transform(
+        data_devices[idx].sol.begin(),
+        data_devices[idx].sol.begin() + model_host.n_binaries + model_host.n_integers,
+        data_devices[idx].sol.begin(), round_op
+    );
+
+    active_solutions[idx] = true;
+
+    recompute_solution_metrics(data_devices[idx],args_devices[idx],gpu_model_ptrs,model_device,
+        model_host.n_equalities, tabu_tenure,idx,true );
+}
+
 void EvolutionSearch::run(MIPData &data) {
     int seed = 0;
 
@@ -1264,7 +1293,7 @@ void EvolutionSearch::run(MIPData &data) {
     thrust::device_vector<single_col_move> best_single_col_moves;
 
     moves_probability probabilities{};
-    /* Initialize probabilities for mulit-armed bandit evenly. Random moves are disabled. */
+    /* Initialize probabilities for multi-armed bandit evenly. Random moves are disabled. */
     constexpr double w = 1.0 / static_cast<double>(AVAILABLE_MOVES - 1);
     for (int i = 0; i < AVAILABLE_MOVES; ++i)
         probabilities[i] = w;
@@ -1377,33 +1406,9 @@ void EvolutionSearch::run(MIPData &data) {
 
 
         if ( !lp_solution_loaded && i_round % LP_SOLUTION_FREQ == 0 ) {
-            assert(!active_solutions[3]);
-            assert(!active_solutions[4]);
-            thrust::copy(data.primals.begin(), data.primals.end(), data_devices[3].sol.begin());
-            thrust::transform(
-                data_devices[3].sol.begin(),
-                data_devices[3].sol.begin() + model_host.n_binaries + model_host.n_integers,
-                data_devices[3].sol.begin(),
-                [] __host__ __device__ (const double x) {
-                    return floor(x);
-                }
-            );
-            active_solutions[3] = true;
-            recompute_solution_metrics(data_devices[3], args_devices[3], gpu_model_ptrs, model_device,
-                           model_host.n_equalities, tabu_tenure, 3, true);
-            thrust::copy(data.primals.begin(), data.primals.end(), data_devices[4].sol.begin());
-            thrust::transform(
-                data_devices[4].sol.begin(),
-                data_devices[4].sol.begin() + model_host.n_binaries + model_host.n_integers,
-                data_devices[4].sol.begin(),
-                [] __host__ __device__ (const double x) {
-                    return ceil(x);
-                }
-            );
-            active_solutions[4] = true;
 
-            recompute_solution_metrics(data_devices[4], args_devices[4], gpu_model_ptrs, model_device,
-               model_host.n_equalities, tabu_tenure, 4, true);
+            load_lp_solution(3, data, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure, [] __host__ __device__ (const double x) { return floor(x); });
+            load_lp_solution(4, data, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure, [] __host__ __device__ (const double x) { return ceil(x); });
             lp_solution_loaded = true;
         }
 
