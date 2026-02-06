@@ -1373,33 +1373,41 @@ void EvolutionSearch::run(MIPData &data) {
 
     bool lp_solution_loaded = false;
     for (int i_round = 0; i_round < n_rounds; ++i_round) {
+
+
+
         if ( !lp_solution_loaded && i_round % LP_SOLUTION_FREQ == 0 ) {
-            // thrust::copy(data.primals.begin(), data.primals.end(), data_devices[3].sol.begin());
-            // thrust::transform(
-            //     data_devices[3].sol.begin(),
-            //     data_devices[3].sol.end(),
-            //     data_devices[3].sol.end(),
-            //     [] __host__ __device__ (double x) {
-            //         return floor(x);
-            //     }
-            // );
-            // active_solutions[3] = true;
-            // recompute_solution_metrics(data_devices[3], args_devices[3], gpu_model_ptrs, model_device,
-            //                model_host.n_equalities, tabu_tenure, 3, true);
-            // thrust::copy(data.primals.begin(), data.primals.end(), data_devices[4].sol.begin());
-            // thrust::transform(
-            //     data_devices[4].sol.begin(),
-            //     data_devices[4].sol.end(),
-            //     data_devices[4].sol.end(),
-            //     [] __host__ __device__ (double x) {
-            //         return ceil(x);
-            //     }
-            // );
-            // active_solutions[4] = true;
-            // recompute_solution_metrics(data_devices[4], args_devices[4], gpu_model_ptrs, model_device,
-            //    model_host.n_equalities, tabu_tenure, 4, true);
+            assert(!active_solutions[3]);
+            assert(!active_solutions[4]);
+            thrust::copy(data.primals.begin(), data.primals.end(), data_devices[3].sol.begin());
+            thrust::transform(
+                data_devices[3].sol.begin(),
+                data_devices[3].sol.begin() + model_host.n_binaries + model_host.n_integers,
+                data_devices[3].sol.begin(),
+                [] __host__ __device__ (const double x) {
+                    return floor(x);
+                }
+            );
+            active_solutions[3] = true;
+            recompute_solution_metrics(data_devices[3], args_devices[3], gpu_model_ptrs, model_device,
+                           model_host.n_equalities, tabu_tenure, 3, true);
+            thrust::copy(data.primals.begin(), data.primals.end(), data_devices[4].sol.begin());
+            thrust::transform(
+                data_devices[4].sol.begin(),
+                data_devices[4].sol.begin() + model_host.n_binaries + model_host.n_integers,
+                data_devices[4].sol.begin(),
+                [] __host__ __device__ (const double x) {
+                    return ceil(x);
+                }
+            );
+            active_solutions[4] = true;
+
+            recompute_solution_metrics(data_devices[4], args_devices[4], gpu_model_ptrs, model_device,
+               model_host.n_equalities, tabu_tenure, 4, true);
             lp_solution_loaded = true;
         }
+
+
         for (int solution_index=0; solution_index< max_solutions; ++solution_index)
         {
             if (!active_solutions[solution_index])
@@ -1407,8 +1415,6 @@ void EvolutionSearch::run(MIPData &data) {
             auto& args_device = args_devices[solution_index];
             auto& data_device = data_devices[solution_index];
             args_device.iter = i_round;
-
-
 
             /* Each kernel and block get assigned as this rounds random seed:
              * i_rounds * (MOVES * BLOCKS) + BLOCKS * i_move + i_block
