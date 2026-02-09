@@ -35,7 +35,7 @@ constexpr int BLOCKSIZE_MOVE = 256;
 
 constexpr int LP_SOLUTION_FREQ = 1000;
 constexpr int SOLUTION_TRANSFER_FREQ = 10;
-constexpr int SOLUTION_IMPORT_FREQ = 1000;
+constexpr int SOLUTION_IMPORT_FREQ = 100;
 constexpr int MAX_VALUE_HUGE = 1000;
 constexpr int RECOMPUTE_SOL_METRICS_FREQ = SOLUTION_TRANSFER_FREQ / 10;
 
@@ -1663,10 +1663,8 @@ void EvolutionSearch::run(MIPData &data) {
                 consoleLog("\tSol{} feasible and submitted to Solution Pool!", solution_index);
 
             }
-            if (i_round > 0 && i_round % SOLUTION_IMPORT_FREQ == 0) {
 
-            }
-
+            //TODO: this should probably moved out of the solution-index loop
             if (i_round > 0 && i_round % SOLUTION_TRANSFER_FREQ == 0) {
                 try_store_partial_solution_for_fpr(data, data_device, args_device, solution_index);
             }
@@ -1706,6 +1704,48 @@ void EvolutionSearch::run(MIPData &data) {
                 consoleInfo("User break; stopping evolution search");
                 return;
             }
+        }
+
+        if (i_round > 0 && i_round % SOLUTION_IMPORT_FREQ == 0) {
+            //TODO: this should probably be global variables
+
+            // Flag indicating whether at least one active solution is feasible
+            bool found_feasible = false;
+            // Best (minimum) objective value among feasible active solutions
+            auto best_objective = DBL_MAX;
+
+            // minimum sum of constraint violation among all active solutions
+            auto best_violation = DBL_MAX;
+
+            for (int solution_index = 0; solution_index < max_solutions; solution_index++) {
+                if (!active_solutions[solution_index]) continue;
+                found_feasible = found_feasible || args_devices[solution_index].is_found_feasible;
+                if (args_devices[solution_index].is_found_feasible)
+                    best_objective = std::min(args_devices[solution_index].objective, best_objective);
+                best_violation = std::min(args_devices[solution_index].sum_viol, best_violation);
+            }
+            for (int solution_index = 0; solution_index < max_solutions; solution_index++) {
+                if (!active_solutions[solution_index]) continue;
+
+                // Case 1: At least one feasible solution exists.
+                // Keep only solutions whose objective is reasonably close
+                // to the best feasible objective or are infeasible but close to the being satisfied
+                if (found_feasible) {
+                    if ((args_devices[solution_index].objective - best_objective) / std::abs(best_objective) > 0.2
+                        || data.mip.maxRhs * 0.2 < args_devices[solution_index].sum_viol )
+                        active_solutions[solution_index] = false;
+                }
+                // Case 2: No feasible solution exists yet.
+                // Prune solutions whose constraint violation is significantly
+                // worse than the current best violation.
+                // TODO: think about the parameters
+                else if (!found_feasible && std::min(data.mip.maxRhs * 0.5, best_violation * 2) < args_devices[
+                             solution_index].sum_viol)
+                    active_solutions[solution_index] = false;
+            }
+#ifdef EXTENDED_DEBUG
+            exit(0);
+#endif
         }
     }
 };
