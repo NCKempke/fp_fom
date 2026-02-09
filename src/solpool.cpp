@@ -61,12 +61,12 @@ int SolutionPool::n_sols() const {
     return pool.size();
 }
 
-Solution SolutionPool::getIncumbent() const
+Solution SolutionPool::getIncumbent(const int nth_best_sol) const
 {
     LockGuard lock(*this);
 
     if (has_feas_unsafe()) {
-        const size_t best_sol = solution_rank[0];
+        const size_t best_sol = solution_rank[nth_best_sol];
         return *pool[best_sol];
     } else  {
         return Solution();

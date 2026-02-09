@@ -46,7 +46,7 @@ public:
     int n_sols() const;
 
     /* Get best feasible solution; if !hasSols, returns empty vector. */
-    Solution getIncumbent() const;
+    Solution getIncumbent(int nth_best_sol = 0) const;
 
     /* Return objective of incumbent. Retuns +- INFTY if !hasFeas. */
     double primalBound() const;

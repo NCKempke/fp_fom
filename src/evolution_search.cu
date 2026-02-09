@@ -1390,6 +1390,14 @@ void launch_move_kernels_to_stream(
     }
 }
 
+int getSolutionSlot(const std::vector<bool> &active_solutions) {
+    for (int i = 0; i < active_solutions.size(); ++i) {
+        if (!active_solutions[i])
+            return i;
+    }
+    return -1;
+}
+
 std::unique_ptr<Solution> make_sol_from_thrust_vector(const MIPInstance &mip, thrust::device_vector<double> x, const double obj_val, const bool isFeas, const double violation)
 {
     assert(isFeas);
@@ -1497,14 +1505,24 @@ void EvolutionSearch::run(MIPData &data) {
             lp_solution_loaded = true;
         }
 
-        if (i_round % SOLUTION_IMPORT_FREQ) {
-            auto& solution_pool = data.solpool;
+        if (i_round % SOLUTION_IMPORT_FREQ == 0) {
             //TODO: add more logic to load
-            if (solution_pool.hasFeas() && !active_solutions[5]) {
-                consoleLog("loading best solution from solution pool");
-                load_primal_solution(5, solution_pool.getIncumbent().x, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure);
-                assert(args_devices[5].sum_viol == 0);
-                args_devices[5].is_found_feasible = true;
+            if (auto &solution_pool = data.solpool; solution_pool.hasFeas()) {
+                consoleLog("loading best three solution from solution pool");
+                for (int i = 0; i < 3; i++) {
+                    if (auto sol = solution_pool.getIncumbent(i); !sol.isParsed && sol.isFeas) {
+                        int slot = getSolutionSlot(active_solutions);
+                        // No available slot for another solution
+                        if (slot == -1)
+                            break;
+                        assert(!active_solutions[slot]);
+                        load_primal_solution(slot, sol.x, data_devices, args_devices,
+                                             active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure);
+                        assert(args_devices[slot].sum_viol == 0);
+                        args_devices[slot].is_found_feasible = true;
+                        sol.isParsed = true;
+                    }
+                }
             }
         }
 
@@ -1623,6 +1641,9 @@ void EvolutionSearch::run(MIPData &data) {
                 sol_ptr->timeFound = gStopWatch().elapsed();
                 data.solpool.add(std::move(sol_ptr));
                 consoleLog("\tSol{} feasible and submitted to Solution Pool!", solution_index);
+
+            }
+            if (i_round > 0 && i_round % SOLUTION_IMPORT_FREQ == 0) {
 
             }
             // TODO: make 100 a #define

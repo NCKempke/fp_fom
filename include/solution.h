@@ -21,6 +21,7 @@ public:
     /* Whether this is a partial solution. For partial solutions remaining x values are set to inf; objval, violation, and iFeas have no meaning when isPartial == true. */
     bool isPartial{false};
     bool isFeas{false};
+    bool isParsed{false};
 
     // equality operator
     bool operator==(const Solution &other) const;
