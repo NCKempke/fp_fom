@@ -40,6 +40,7 @@ constexpr int SOLUTION_TRANSFER_FREQ = 10;
 constexpr int SOLUTION_IMPORT_FREQ = 100;
 constexpr int MAX_VALUE_HUGE = 1000;
 constexpr int RECOMPUTE_SOL_METRICS_FREQ = SOLUTION_TRANSFER_FREQ / 10;
+constexpr int REMOVE_CROSSOVER_FREQ = 100 ;
 
 static_assert(SOLUTION_TRANSFER_FREQ % RECOMPUTE_SOL_METRICS_FREQ == 0);
 
@@ -1759,7 +1760,7 @@ void EvolutionSearch::run(MIPData &data) {
             }
         }
 
-        if (i_round > 0 && i_round % SOLUTION_IMPORT_FREQ == 0) {
+        if (i_round > 0 && i_round % RECOMPUTE_SOL_METRICS_FREQ == 0) {
             //TODO: this should probably be global variables
 
             // Flag indicating whether at least one active solution is feasible
@@ -1775,17 +1776,6 @@ void EvolutionSearch::run(MIPData &data) {
             // crossover candidate
             auto best_infeasible_objective = DBL_MAX;
             int arg_crossover = -1;
-
-            if (arg_best_objective != -1 && arg_crossover != -1) {
-                int solution_slot = getSolutionSlot(active_solutions);
-                if (solution_slot != -1) {
-                    perform_crossover(data_devices[solution_slot].sol, data_devices[arg_best_objective].sol, data_devices[arg_crossover].sol);
-                    active_solutions[solution_slot] = true;
-                    recompute_solution_metrics(data_devices[solution_slot], args_devices[solution_slot], gpu_model_ptrs,
-                                               model_device,
-                                               model_host.n_equalities, tabu_tenure, solution_slot, true);
-                }
-            }
 
             for (int solution_index = 0; solution_index < max_solutions; solution_index++) {
                 if (!active_solutions[solution_index]) continue;
@@ -1803,7 +1793,19 @@ void EvolutionSearch::run(MIPData &data) {
                 }
                 best_violation = std::min(args_devices[solution_index].sum_viol, best_violation);
             }
+
             // perform crossover
+            if (arg_best_objective != -1 && arg_crossover != -1) {
+                int solution_slot = getSolutionSlot(active_solutions);
+                if (solution_slot != -1) {
+                    perform_crossover(data_devices[solution_slot].sol, data_devices[arg_best_objective].sol, data_devices[arg_crossover].sol);
+                    active_solutions[solution_slot] = true;
+                    recompute_solution_metrics(data_devices[solution_slot], args_devices[solution_slot], gpu_model_ptrs,
+                                               model_device,
+                                               model_host.n_equalities, tabu_tenure, solution_slot, true);
+                }
+            }
+
 
             for (int solution_index = 0; solution_index < max_solutions; solution_index++) {
                 if (!active_solutions[solution_index]) continue;
@@ -1813,16 +1815,20 @@ void EvolutionSearch::run(MIPData &data) {
                 // to the best feasible objective or are infeasible but close to the being satisfied
                 if (found_feasible) {
                     if ((args_devices[solution_index].objective - best_objective) / std::abs(best_objective) > 0.2
-                        || data.mip.maxRhs * 0.2 < args_devices[solution_index].sum_viol )
+                        || data.mip.maxRhs * 0.2 < args_devices[solution_index].sum_viol) {
                         active_solutions[solution_index] = false;
+                        consoleLog("\t Sol{}: removed", solution_index);
+                    }
                 }
                 // Case 2: No feasible solution exists yet.
                 // Prune solutions whose constraint violation is significantly
                 // worse than the current best violation.
                 // TODO: think about the parameters
                 else if (!found_feasible && std::min(data.mip.maxRhs * 0.5, best_violation * 2) < args_devices[
-                             solution_index].sum_viol)
+                             solution_index].sum_viol) {
                     active_solutions[solution_index] = false;
+                    consoleLog("\t Sol{}: removed", solution_index);
+                }
             }
 #ifdef EXTENDED_DEBUG
             exit(0);
