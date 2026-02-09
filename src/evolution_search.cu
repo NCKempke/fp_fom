@@ -1394,11 +1394,13 @@ void launch_move_kernels_to_stream(
 }
 
 /* Check whether it seems worth to copy the current solution back to device and pass it to FPR. */
-void EvolutionSearch::try_store_partial_solution_for_fpr(const TabuSearchDataDevice& data_device, const TabuSearchKernelArgs& args_device, int sol_idx)
+void EvolutionSearch::try_store_partial_solution_for_fpr(MIPData &data, const TabuSearchDataDevice& data_device, const TabuSearchKernelArgs& args_device, int sol_idx)
 {
     /* We only add infeasible solutions. */
     if (args_device.is_found_feasible)
         return;
+
+    auto& partials = data.partials;
 
     /* If our solution has a better objective than the best one in the pool, add it. */
     if (partials.n_sols() == 0 || partials.getSol(0).objval > args_device.objective) {
@@ -1634,7 +1636,7 @@ void EvolutionSearch::run(MIPData &data) {
 
             if (i_round > 0 && i_round % SOLUTION_TRANSFER_FREQ == 0) {
 
-                try_store_partial_solution_for_fpr(data_device, args_device, solution_index);
+                try_store_partial_solution_for_fpr(data, data_device, args_device, solution_index);
             }
 
 #ifdef EXTENDED_DEBUG

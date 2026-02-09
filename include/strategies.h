@@ -102,6 +102,7 @@ public:
 	virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) override
 	{
 		FP_ASSERT(data.mip.ncols == (data.nBinaries + data.nIntegers + data.nContinuous));
+		FP_ASSERT(data.partials.n_sols() > 0);
 
 		std::vector<double> sol;
 		std::vector<bool> marked(data.mip.ncols - data.nContinuous, false);
