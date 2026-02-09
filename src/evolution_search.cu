@@ -32,10 +32,12 @@
 constexpr int BLOCKSIZE_MOVE = 256;
 
 constexpr int LP_SOLUTION_FREQ = 1000;
-constexpr int SOLUTION_TRANSFER_FREQ = 1000;
+constexpr int SOLUTION_TRANSFER_FREQ = 100;
 constexpr int SOLUTION_IMPORT_FREQ = 1000;
 constexpr int MAX_VALUE_HUGE = 1000;
 constexpr int RECOMPUTE_SOL_METRICS_FREQ = SOLUTION_TRANSFER_FREQ / 10;
+
+static_assert(SOLUTION_TRANSFER_FREQ % RECOMPUTE_SOL_METRICS_FREQ == 0);
 
 constexpr int N_WARPS_PER_BLOCK = BLOCKSIZE_MOVE / WARP_SIZE;
 static_assert(BLOCKSIZE_MOVE % WARP_SIZE == 0);
@@ -1391,6 +1393,28 @@ void launch_move_kernels_to_stream(
     }
 }
 
+/* Check whether it seems worth to copy the current solution back to device and pass it to FPR. */
+void EvolutionSearch::try_store_partial_solution_for_fpr(const TabuSearchDataDevice& data_device, const TabuSearchKernelArgs& args_device, int sol_idx)
+{
+    /* We only add infeasible solutions. */
+    if (args_device.is_found_feasible)
+        return;
+
+    /* If our solution has a better objective than the best one in the pool, add it. */
+    if (partials.n_sols() == 0 || partials.getSol(0).objval > args_device.objective) {
+        consoleInfo("\tSol{} : Moving solution to partial pool", sol_idx);
+
+        thrust::host_vector<double> sol_host = data_device.sol; /* Copy back solution. */
+        auto sol = std::make_unique<Solution>();
+        sol->x.insert(sol->x.end(), sol_host.begin(), sol_host.end());
+        sol->objval = args_device.objective;
+        sol->isFeas = false;
+        sol->absViolation = args_device.sum_viol;
+        sol->relViolation = sol->absViolation / model_host.maxRhs;
+
+        partials.add(std::move(sol), true);
+    }
+}
 
 void EvolutionSearch::run(MIPData &data) {
     int seed = 0;
@@ -1414,7 +1438,7 @@ void EvolutionSearch::run(MIPData &data) {
     auto gpu_model_ptrs = model_device.get_ptrs();
 
     int max_solutions = 10;
-    std::vector active_solutions (max_solutions, false);
+    std::vector<bool> active_solutions (max_solutions, false);
     // Data devices and kernel args
     std::vector<TabuSearchDataDevice> data_devices;
     data_devices.reserve(max_solutions);
@@ -1607,22 +1631,10 @@ void EvolutionSearch::run(MIPData &data) {
                 //TODO: add solution to pool
                 consoleLog("\tSol{} turned feasible!");
             }
-            // TODO: make 100 a #define
+
             if (i_round > 0 && i_round % SOLUTION_TRANSFER_FREQ == 0) {
-                // ensure that the solution metrics are updated
-                assert(RECOMPUTE_SOL_METRICS_FREQ % SOLUTION_TRANSFER_FREQ == 0);
-                /* TODO: Check whether our partial solution's objective is good enough to be stored in the partial solutions pool. */
-                thrust::host_vector<double> sol_host = data_device.sol; /* Copy back solution. */
 
-                consoleInfo("\tSol{} : Moving solution to partial pool", solution_index);
-                auto sol = std::make_unique<Solution>();
-                sol->x.insert(sol->x.end(), sol_host.begin(), sol_host.end());
-                sol->objval = args_device.objective; // TODO recompute
-                sol->isFeas = false; // TODO only a hack
-                sol->absViolation = args_device.sum_viol; // TODO only a hack
-                sol->relViolation = sol->absViolation / model_host.maxRhs;
-
-                partials.add(std::move(sol));
+                try_store_partial_solution_for_fpr(data_device, args_device, solution_index);
             }
 
 #ifdef EXTENDED_DEBUG

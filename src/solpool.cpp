@@ -96,7 +96,7 @@ double SolutionPool::minViolation() const
     }
 }
 
-void SolutionPool::add_unsafe(std::unique_ptr<Solution> sol) {
+void SolutionPool::add_unsafe(std::unique_ptr<Solution> sol, bool force) {
     // avoid adding duplicates
     auto end = pool.end();
     auto compEq = [&](const std::unique_ptr<Solution>& other)
@@ -128,7 +128,7 @@ void SolutionPool::add_unsafe(std::unique_ptr<Solution> sol) {
     // Find where to insert the new index in the rank vector
     auto insertPos = std::lower_bound(solution_rank.begin(), solution_rank.end(), sol, comp);
 
-    if (std::distance(solution_rank.begin(), insertPos) < 10) {
+    if (force || std::distance(solution_rank.begin(), insertPos) < 10) {
         solution_rank.insert(insertPos, new_index);
         pool.push_back(std::move(sol));
     }
@@ -145,7 +145,7 @@ void SolutionPool::merge(SolutionPool &other)
     other.pool.clear();
 }
 
-void SolutionPool::add(std::unique_ptr<Solution> sol)
+void SolutionPool::add(std::unique_ptr<Solution> sol, bool force)
 {
     if (!sol)
         return;
@@ -159,7 +159,7 @@ void SolutionPool::add(std::unique_ptr<Solution> sol)
         consoleLog("found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}",
                sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, sol->timeFound, sol->foundBy);
 
-    add_unsafe(std::move(sol));
+    add_unsafe(std::move(sol), force);
 }
 
 static double solDistance(std::span<const double> x1, std::span<const double> x2)

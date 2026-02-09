@@ -4,6 +4,8 @@
 class GpuModel;
 class MIPInstance;
 class SolutionPool;
+class TabuSearchDataDevice;
+class TabuSearchKernelArgs;
 
 class EvolutionSearch {
 public:
@@ -15,9 +17,11 @@ public:
     int n_rounds = 10000;
     int tabu_tenure = 10;
 
-    /* TODO: GPU solution pool. */
 
     EvolutionSearch(const MIPInstance& model_host_, const GpuModel& model_device_, SolutionPool& partials_) : model_host(model_host_), model_device(model_device_), partials(partials_) {};
 
     void run(MIPData &data);
+
+private:
+    void try_store_partial_solution_for_fpr(const TabuSearchDataDevice& data_device, const TabuSearchKernelArgs& args_device, int sol_idx);
 };
