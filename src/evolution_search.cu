@@ -1222,7 +1222,7 @@ void recompute_solution_metrics(TabuSearchDataDevice &data_device, TabuSearchKer
             return !is_eq_feas(x, 0) ? fabs(x) : 0.0;
         },
         0.0,
-        thrust::plus<double>()
+        cuda::std::plus<double>()
     );
 
     /* calculate violations for ineq*/
@@ -1234,7 +1234,7 @@ void recompute_solution_metrics(TabuSearchDataDevice &data_device, TabuSearchKer
             return is_lt_feas(x, 0) ? fabs(x) : 0.0;
         },
         sum_viol,
-        thrust::plus<double>()
+        cuda::std::plus<double>()
     );
     /* update objective */
     args_device.objective = thrust_dot_product(data_device.sol, model_device.objective);
@@ -1640,7 +1640,7 @@ void EvolutionSearch::run(MIPData &data) {
                     return !is_eq_feas(x, 0) ? fabs(x) : 0.0;
                 },
                 0.0,
-                thrust::plus<double>()
+                cuda::std::plus<double>()
             );
 
             /* calculate violations for ineq*/
@@ -1652,7 +1652,7 @@ void EvolutionSearch::run(MIPData &data) {
                     return is_lt_feas(x, 0) ? fabs(x) : 0.0;
                 },
                 aux_sol_viol,
-                thrust::plus<double>()
+                cuda::std::plus<double>()
             );
             assert(is_eq_feas(aux_sol_viol, args_device.sum_viol));
 #endif
