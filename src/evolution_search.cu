@@ -417,6 +417,8 @@ __device__ move_score compute_score_single_col_move_warp(const GpuModelPtrs &mod
 
     const double slack_change = warp_sum_reduce(viol_change_thread);
     const double weighted_viol_change = warp_sum_reduce(weighted_viol_change_thread);
+    if (args.is_found_feasible && slack_change == 0)
+        weighted_viol_change_thread += args.objective_weight[0] * delta_obj;
 
     return {delta_obj, slack_change, weighted_viol_change};
 }
@@ -1524,9 +1526,9 @@ void EvolutionSearch::run(MIPData &data) {
         args_devices.emplace_back(data_devices[i], model_host, tabu_tenure);
     }
 
-    load_initial_solutions(0, 0.0, true, true, data_devices, args_devices, model_device, active_solutions, gpu_model_ptrs, model_host.n_equalities, tabu_tenure);
-    load_initial_solutions(1, -MAX_VALUE_HUGE, true, false, data_devices,args_devices, model_device, active_solutions, gpu_model_ptrs, model_host.n_equalities, tabu_tenure);
-    load_initial_solutions(2, MAX_VALUE_HUGE, false, true, data_devices, args_devices, model_device, active_solutions, gpu_model_ptrs, model_host.n_equalities, tabu_tenure);
+    // load_initial_solutions(0, 0.0, true, true, data_devices, args_devices, model_device, active_solutions, gpu_model_ptrs, model_host.n_equalities, tabu_tenure);
+    // load_initial_solutions(1, -MAX_VALUE_HUGE, true, false, data_devices,args_devices, model_device, active_solutions, gpu_model_ptrs, model_host.n_equalities, tabu_tenure);
+    // load_initial_solutions(2, MAX_VALUE_HUGE, false, true, data_devices, args_devices, model_device, active_solutions, gpu_model_ptrs, model_host.n_equalities, tabu_tenure);
 
 #define EXTENDED_DEBUG
 
@@ -1573,8 +1575,8 @@ void EvolutionSearch::run(MIPData &data) {
         if ( !lp_solution_loaded && i_round % LP_SOLUTION_FREQ == 0 ) {
             /* Check whether the LP is ready yet. */
             if (data.lp_solution_ready.load(std::memory_order_acquire)) {
-                load_lp_solution(3, data, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure, [] __host__ __device__ (const double x) { return floor(x); });
-                load_lp_solution(4, data, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure, [] __host__ __device__ (const double x) { return ceil(x); });
+                // load_lp_solution(3, data, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure, [] __host__ __device__ (const double x) { return floor(x); });
+                // load_lp_solution(4, data, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure, [] __host__ __device__ (const double x) { return ceil(x); });
                 lp_solution_loaded = true;
             }
         }
@@ -1619,8 +1621,8 @@ void EvolutionSearch::run(MIPData &data) {
 #ifdef EXTENDED_DEBUG
             if (args_device.n_violated == 0 && solution_index <= 4) {
                 // double objective = args_device.objective;
-                consoleInfo("\tSol{} : Found feasible!", solution_index);
-                return;
+                // consoleInfo("\tSol{} : Found feasible!", solution_index);
+                // return;
             }
 #endif
 
@@ -1815,23 +1817,23 @@ void EvolutionSearch::run(MIPData &data) {
                 // to the best feasible objective or are infeasible but close to the being satisfied
                 if (found_feasible) {
                     if ((args_devices[solution_index].objective - best_objective) / std::abs(best_objective) > 0.2
-                        || data.mip.maxRhs * 0.2 < args_devices[solution_index].sum_viol) {
+                        || data.mip.maxRhs * model_host.ncols * 0.2 < args_devices[solution_index].sum_viol) {
                         active_solutions[solution_index] = false;
-                        consoleLog("\t Sol{}: removed", solution_index);
+                        consoleLog("\tSol{}: removed", solution_index);
                     }
                 }
                 // Case 2: No feasible solution exists yet.
                 // Prune solutions whose constraint violation is significantly
                 // worse than the current best violation.
                 // TODO: think about the parameters
-                else if (!found_feasible && std::min(data.mip.maxRhs * 0.5, best_violation * 2) < args_devices[
+                else if (!found_feasible && std::min(data.mip.maxRhs * model_host.ncols * 0.5, best_violation * 2) < args_devices[
                              solution_index].sum_viol) {
                     active_solutions[solution_index] = false;
                     consoleLog("\t Sol{}: removed", solution_index);
                 }
             }
 #ifdef EXTENDED_DEBUG
-            exit(0);
+            // exit(0);
 #endif
         }
     }
