@@ -1473,14 +1473,13 @@ void EvolutionSearch::run(MIPData &data) {
 
     bool lp_solution_loaded = false;
     for (int i_round = 0; i_round < n_rounds; ++i_round) {
-
-
-
         if ( !lp_solution_loaded && i_round % LP_SOLUTION_FREQ == 0 ) {
-
-            load_lp_solution(3, data, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure, [] __host__ __device__ (const double x) { return floor(x); });
-            load_lp_solution(4, data, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure, [] __host__ __device__ (const double x) { return ceil(x); });
-            lp_solution_loaded = true;
+            /* Check whether the LP is ready yet. */
+            if (data.lp_solution_ready.load(std::memory_order_acquire)) {
+                load_lp_solution(3, data, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure, [] __host__ __device__ (const double x) { return floor(x); });
+                load_lp_solution(4, data, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure, [] __host__ __device__ (const double x) { return ceil(x); });
+                lp_solution_loaded = true;
+            }
         }
 
         if (i_round % SOLUTION_IMPORT_FREQ) {
