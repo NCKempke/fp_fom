@@ -80,6 +80,19 @@ static void fpr_worker (MIPData& mip_data, MIPModelPtr lp, const std::vector<std
             continue;
         }
 
+        /* If ranker or value chooser need a partial solution, check whether one exists and pick one, else, continue. */
+        if (rankerNeedsPartial(strat.first) || valueChooserNeedsPartial(strat.second)) {
+
+            const int n_partials = mip_data.partials.n_sols();
+            if (n_partials == 0)
+                continue;
+
+            /* For now, we pick idx % n_sols. */
+            params.partial_sol = idx % n_partials;
+
+            assert(0 <= params.partial_sol && params.partial_sol < mip_data.partials.n_sols());
+        }
+
         /* Update the seed in case we do the same experiment twice. */
         params.seed = seed_orig + ith_run;
         params.ranker = strat.first;

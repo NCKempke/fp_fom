@@ -215,6 +215,9 @@ public:
 	/* Private parameters (derived from input). */
 	bool solveLp = false; /** Whether to solve the LP relaxation. */
 
+	/* Which partial solution to use for the partial sol strategies. -1 ~= 0. */
+	int partial_sol{-1};
+
 	void readConfig();
 	void logToConsole();
 	void printUsage();

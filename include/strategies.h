@@ -99,12 +99,12 @@ using ValuePtr = std::shared_ptr<ValueChooser>;
 class RowViolation : public Ranker
 {
 public:
+	RowViolation(const MIPData &data, const Params &params) : sol(data.partials.getSol(params.partial_sol).x) {}
+
 	virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) override
 	{
 		FP_ASSERT(data.mip.ncols == (data.nBinaries + data.nIntegers + data.nContinuous));
-		FP_ASSERT(data.partials.n_sols() > 0);
 
-		std::vector<double> sol;
 		std::vector<bool> marked(data.mip.ncols - data.nContinuous, false);
 		std::vector<int> discrete_vars(marked.size());
 
@@ -154,6 +154,9 @@ public:
 		FP_ASSERT(pos == static_cast<int>(discrete_vars.size()));
 		return discrete_vars;
 	}
+
+protected:
+	const std::vector<double>& sol;
 };
 
 /** Take integers and binaries as is from the problem. */
@@ -960,13 +963,54 @@ public:
 
 			FP_ASSERT(isInteger(value, ABS_INT_TOL) && lb <= value && value <= ub);
 			fixingVal = value;
-		}
+	}
 
 		return fixingVal;
 	}
 
 protected:
 	const std::vector<double> &xref;
+};
+
+class RandomGuided : public ValueChooser
+{
+public:
+	RandomGuided(const MIPData& data, uint64_t seed, int i_partial)
+		: ValueChooser{seed}, sol{data.partials.getSol(i_partial).x} {};
+
+	virtual double operator()(const MIPData &data, const Domain &domain, int var) override
+	{
+		const double lb = domain.lb(var);
+		const double ub = domain.ub(var);
+		double fixingVal = 0.0;
+		double randVal = randZeroOne();
+
+		if (domain.type(var) == 'B')
+		{
+			if (randVal >= sol[var])
+				fixingVal = domain.lb(var);
+			else
+				fixingVal = domain.ub(var);
+		}
+		else
+		{
+			FP_ASSERT(domain.type(var) == 'I');
+			double sol_down = floorEps(sol[var]);
+			double sol_up = ceilEps(sol[var]);
+			double fracPart = fractionalPart(sol[var]);
+			double value = (randVal >= fracPart) ? sol_down : sol_up;
+			value = std::min(value, ub);
+			value = std::max(value, lb);
+
+			FP_ASSERT(isInteger(value, ABS_INT_TOL) && lb <= value && value <= ub);
+			fixingVal = value;
+		}
+
+		return fixingVal;
+	}
+
+protected:
+	const std::vector<double> sol;
 };
 
 class BranchSimple : public DFSStrategy
@@ -1149,7 +1193,7 @@ RankerPtr makeRanker(RankerType ranker, const Params &params, const MIPData &dat
 	case RankerType::REDCOSTS_BREAK_FRAC:
 		return RankerPtr{new RedCostWithFracTieBreaker(params.seed)};
 	case RankerType::ROW_VIOLATION:
-		return RankerPtr{new RowViolation()};
+		return RankerPtr{new RowViolation(data, params)};
 	default:
 	case RankerType::UNKNOWN:
 		FP_ASSERT(false);
@@ -1172,6 +1216,8 @@ ValuePtr makeValueChooser(ValueChooserType value_chooser, const Params &params, 
 		return ValuePtr{new Loose()};
 	case ValueChooserType::RANDOM_LP:
 		return ValuePtr{new RandomRelaxation(params.seed, data.primals)};
+	case ValueChooserType::RANDOM_GUIDED:
+		return ValuePtr{new RandomGuided(data, params.seed, params.partial_sol)};
 	case ValueChooserType::UP:
 		return ValuePtr{new AlwaysUp()};
 	case ValueChooserType::DOWN:

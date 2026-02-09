@@ -26,12 +26,16 @@ enum class ValueChooserType
     RANDOM_UP_DOWN,
     ROUND_INT,
     SPLIT,
+    RANDOM_GUIDED, // Random rounding using a solution from the partial pool as guide
 };
 
 ValueChooserType ValueChooserTypeFromString(const std::string &str);
 
 /* Whether a certain value chooser needs an LP to function. */
 bool valueChooserNeedsLpSolve(ValueChooserType valueChooser);
+
+/* Wether a certain value chooser needs a partial solution to function. */
+bool valueChooserNeedsPartial(ValueChooserType valueChooser);
 
 std::string toString(ValueChooserType valueChooser);
 

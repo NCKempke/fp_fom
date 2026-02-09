@@ -21,6 +21,7 @@
 
 #include "cub/cub.cuh"
 
+extern int UserBreak;
 
 /* We submit blocks with WARPS_PER_BLOCK many warps. Each warp is responsible for computing N_MOVES_PER_WARP many moves.
  * To compute n_moves of a certain move type, we need to submit
@@ -32,7 +33,7 @@
 constexpr int BLOCKSIZE_MOVE = 256;
 
 constexpr int LP_SOLUTION_FREQ = 1000;
-constexpr int SOLUTION_TRANSFER_FREQ = 100;
+constexpr int SOLUTION_TRANSFER_FREQ = 10;
 constexpr int SOLUTION_IMPORT_FREQ = 1000;
 constexpr int MAX_VALUE_HUGE = 1000;
 constexpr int RECOMPUTE_SOL_METRICS_FREQ = SOLUTION_TRANSFER_FREQ / 10;
@@ -1669,6 +1670,11 @@ void EvolutionSearch::run(MIPData &data) {
             );
             assert(is_eq_feas(aux_sol_viol, args_device.sum_viol));
 #endif
+
+            if (UserBreak) {
+                consoleInfo("User break; stopping evolution search");
+                return;
+            }
         }
     }
 };

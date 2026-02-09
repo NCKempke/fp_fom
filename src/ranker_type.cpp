@@ -55,6 +55,10 @@ bool rankerNeedsLpSolve(RankerType ranker)
     return (ranker == RankerType::DUALS || ranker == RankerType::FRAC || ranker == RankerType::REDCOSTS || ranker == RankerType::DUALS_BREAK_FRAC || ranker == RankerType::FRAC_BREAK_DUALS || ranker == RankerType::FRAC_BREAK_REDCOSTS || ranker == RankerType::REDCOSTS_BREAK_FRAC || ranker == RankerType::CLIQUES || ranker == RankerType::CLIQUES2);
 }
 
+bool rankerNeedsPartial(RankerType ranker) {
+    return (ranker == RankerType::ROW_VIOLATION);
+}
+
 bool rankerNeedsCliqueCover(RankerType ranker)
 {
     return (ranker == RankerType::TYPECL || ranker == RankerType::CLIQUES);

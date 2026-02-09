@@ -352,7 +352,9 @@ protected:
 			{RankerType::DUALS, ValueChooserType::RANDOM_LP},
 			{RankerType::RANDOM, ValueChooserType::RANDOM_LP},
 			{RankerType::REDCOSTS, ValueChooserType::RANDOM_LP},
-			{RankerType::TYPE, ValueChooserType::RANDOM_LP}
+			{RankerType::TYPE, ValueChooserType::RANDOM_LP},
+			{RankerType::TYPE, ValueChooserType::RANDOM_GUIDED},
+			{RankerType::ROW_VIOLATION, ValueChooserType::RANDOM_GUIDED},
 		};
 
 		std::vector<std::unique_ptr<std::atomic<bool>>> worker_flags = submit_fpr_workers(*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, finish_time, 5, params);
