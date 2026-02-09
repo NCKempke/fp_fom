@@ -60,6 +60,8 @@ public:
     /* Print solution pool info. */
     void print() const;
 
+    void mark_solution_rank_parsed(int i) const;
+
 private:
     void lock() const;
     void unlock() const;

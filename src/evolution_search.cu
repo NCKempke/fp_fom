@@ -1506,11 +1506,11 @@ void EvolutionSearch::run(MIPData &data) {
         }
 
         if (i_round % SOLUTION_IMPORT_FREQ == 0) {
-            //TODO: add more logic to load
             if (auto &solution_pool = data.solpool; solution_pool.hasFeas()) {
                 consoleLog("loading best three solution from solution pool");
                 for (int i = 0; i < 3; i++) {
-                    if (auto sol = solution_pool.getIncumbent(i); !sol.isParsed && sol.isFeas) {
+                    auto sol = solution_pool.getIncumbent(i);
+                    if ( !sol.isParsed && sol.isFeas) {
                         int slot = getSolutionSlot(active_solutions);
                         // No available slot for another solution
                         if (slot == -1)
@@ -1520,7 +1520,7 @@ void EvolutionSearch::run(MIPData &data) {
                                              active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure);
                         assert(args_devices[slot].sum_viol == 0);
                         args_devices[slot].is_found_feasible = true;
-                        sol.isParsed = true;
+                        solution_pool.mark_solution_rank_parsed(i);
                     }
                 }
             }

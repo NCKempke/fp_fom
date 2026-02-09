@@ -196,3 +196,9 @@ void SolutionPool::print() const
                    k, sol.objval, sol.relViolation, sol.absViolation, sol.isFeas, solDistance(best.x, sol.x), sol.timeFound, sol.foundBy);
     }
 }
+
+void SolutionPool::mark_solution_rank_parsed(const int i) const {
+    LockGuard lock(*this);
+    pool[solution_rank[i]]->isParsed = true;
+
+}
