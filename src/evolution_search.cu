@@ -18,6 +18,8 @@
 #include <thrust/inner_product.h>
 #include <thrust/partition.h>
 #include <thrust/sequence.h>
+#include <thrust/tuple.h>
+#include <thrust/random.h>
 
 #include "timer.h"
 #include "cub/cub.cuh"
@@ -1435,6 +1437,57 @@ void EvolutionSearch::try_store_partial_solution_for_fpr(MIPData &data, const Ta
     }
 }
 
+
+struct crossover_functor {
+    unsigned int seed;
+    double probability;
+
+    crossover_functor(const unsigned int _seed, const double _probability) : seed(_seed), probability(_probability) {}
+
+    __host__ __device__
+    float operator()(const thrust::tuple<float, float, int>& t) const {
+        const float a = thrust::get<0>(t);
+        const float b = thrust::get<1>(t);
+        const int idx = thrust::get<2>(t);
+
+        if (a != b) {
+            //TODO: not sure if there is a better way to generate the randoms
+            thrust::default_random_engine rng(seed);
+            thrust::uniform_real_distribution<double> dist(0.0, 1.0);
+
+            // Discard idx numbers to get different random values per element
+            rng.discard(idx);
+
+            // Random selection: pick a if random < probability, else pick b
+            return (dist(rng) < probability) ? a : b;
+        }
+        return a;  // Values are the same, return either
+    }
+};
+
+
+void perform_crossover(thrust::device_vector<double>& result,
+                       const thrust::device_vector<double>& parent1,
+                       const thrust::device_vector<double>& parent2) {
+
+    // Create index sequence - THIS IS REQUIRED
+    thrust::counting_iterator index_begin(0);
+
+    // Create iterator tuples - MUST INCLUDE THE INDEX
+    const auto input_begin = thrust::make_zip_iterator(
+        thrust::make_tuple(parent1.begin(), parent2.begin(), index_begin)
+    );
+
+
+    // Perform crossover
+    // higher probability favors the first vector, aka parent1
+    thrust::transform(input_begin,
+                      input_begin + parent1.size(),
+                      result.begin(),
+                      crossover_functor(0, 0.8));  // Use time as seed
+}
+
+
 void EvolutionSearch::run(MIPData &data) {
     int seed = 0;
 
@@ -1717,13 +1770,41 @@ void EvolutionSearch::run(MIPData &data) {
             // minimum sum of constraint violation among all active solutions
             auto best_violation = DBL_MAX;
 
+            int arg_best_objective = -1;
+
+            // crossover candidate
+            auto best_infeasible_objective = DBL_MAX;
+            int arg_crossover = -1;
+
+            if (arg_best_objective != -1 && arg_crossover != -1) {
+                int solution_slot = getSolutionSlot(active_solutions);
+                if (solution_slot != -1) {
+                    perform_crossover(data_devices[solution_slot].sol, data_devices[arg_best_objective].sol, data_devices[arg_crossover].sol);
+                    active_solutions[solution_slot] = true;
+                    recompute_solution_metrics(data_devices[solution_slot], args_devices[solution_slot], gpu_model_ptrs,
+                                               model_device,
+                                               model_host.n_equalities, tabu_tenure, solution_slot, true);
+                }
+            }
+
             for (int solution_index = 0; solution_index < max_solutions; solution_index++) {
                 if (!active_solutions[solution_index]) continue;
                 found_feasible = found_feasible || args_devices[solution_index].is_found_feasible;
-                if (args_devices[solution_index].is_found_feasible)
-                    best_objective = std::min(args_devices[solution_index].objective, best_objective);
+                if (args_devices[solution_index].is_found_feasible) {
+                    if (args_devices[solution_index].objective < best_objective) {
+                        best_objective = args_devices[solution_index].objective;
+                        arg_best_objective = solution_index;
+                    }
+                }
+                //TODO: the solution must not necessarily not found_feasible wrong but we might want to have a solution with a better solution value
+                else if (args_devices[solution_index].objective < best_infeasible_objective) {
+                    best_infeasible_objective = args_devices[solution_index].objective;
+                    arg_crossover  = solution_index;
+                }
                 best_violation = std::min(args_devices[solution_index].sum_viol, best_violation);
             }
+            // perform crossover
+
             for (int solution_index = 0; solution_index < max_solutions; solution_index++) {
                 if (!active_solutions[solution_index]) continue;
 
