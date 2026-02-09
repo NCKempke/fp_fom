@@ -6,16 +6,28 @@
 #include "linear_propagator.h"
 #include <consolelog.h>
 
-LinearPropagator::LinearPropagator(const MIPInstance& mip_) : PropagatorI{}, mip{mip_} {}
+LinearPropagator::LinearPropagator(const MIPInstance& mip_, double obj_cutoff) : PropagatorI{}, obj_rhs{obj_cutoff - mip_.objOffset},
+	obj_sense{mip_.objSense == 1.0 ? 'L' : 'G'}, mip{mip_} {
+		/* The objective gets propagated as c'x + offset <= cutoff for minimization (objsense == 1.0), so c'x <= cutoff - offset. */
+		FP_ASSERT(mip.objSense == 1.0);
+	}
 
 /* Compute activities for a given row */
-LinearPropagator::State LinearPropagator::computeState(const Domain &domain, SparseMatrix::view_type row) const
+LinearPropagator::State LinearPropagator::computeState(const Domain &domain, const int row) const
 {
 	State s{}; //< all fields initialized to zero
 	int n = domain.ncols();
+	const bool is_objective = (row == mip.nrows);
 
-	for (const auto &[var, coef] : row)
+	const int *idx = is_objective ? mip.obj_cols.data() : mip.rows[row].idx();
+	const double *coefs = is_objective ? mip.obj_coefs.data() : mip.rows[row].coef();
+	const size_t nnz = is_objective ? mip.obj_coefs.size() : mip.rows[row].size();
+
+	for (size_t inz = 0; inz < nnz; ++inz)
 	{
+		const int var = idx[inz];
+		const double coef = coefs[inz];
+
 		FP_ASSERT((var >= 0) && (var < n));
 		FP_ASSERT(coef != 0.0);
 		double lb = domain.lb(var);
@@ -37,10 +49,10 @@ LinearPropagator::State LinearPropagator::computeState(const Domain &domain, Spa
 
 void LinearPropagator::init(const Domain &domain)
 {
-	int m = mip.nrows;
+	int m = mip.nrows + 1; /* All rows + objective. Objective row [nrows]. */
 	states.resize(m);
 	for (int i = 0; i < m; i++)
-		states[i] = computeState(domain, mip.rows[i]);
+		states[i] = computeState(domain, i);
 
 	/* Rows are normalized: find position of first non binary variable.
 	 * This is not part of computeState as this piece of information nevers gets invalidated.
@@ -48,10 +60,10 @@ void LinearPropagator::init(const Domain &domain)
 	firstNonBin.resize(m);
 	for (int i = 0; i < m; i++)
 	{
-		const auto &row = mip.rows[i];
-		const int *idx = row.idx();
-		int cnt = row.size();
-		int k = 0;
+		const bool is_objective = (i == mip.nrows);
+		const int *idx = is_objective ? mip.obj_cols.data() : mip.rows[i].idx();
+		const size_t cnt = is_objective ? mip.obj_cols.size() : mip.rows[i].size();
+		size_t k = 0;
 
 		while ((k < cnt) && domain.type(idx[k]) == 'B')
 			k++;
@@ -75,35 +87,45 @@ void LinearPropagator::update(const Domain &domain, Domain::iterator mark)
 
 		for (const auto &[i, coef] : mip.cols[bdchg.var])
 			states[i].infeas = false;
+
+		if (!iszero(mip.obj[bdchg.var]))
+			states[mip.nrows].infeas = false;
+	}
+}
+
+void LinearPropagator::undoBoundChangeForEntry(const Domain &domain, const BoundChange &bdchg, int row, double coef) {
+	State &s = states[row];
+	const int col = bdchg.var;
+
+	/* Reset infeas status on backtrack */
+	s.infeas = false;
+
+	/* update diameter */
+	if (bdchg.type != BoundChange::Type::SHIFT)
+	{
+		double origLB = mip.lb[col];
+		double origUB = mip.ub[col];
+		FP_ASSERT(origUB >= origLB);
+		double spread = origUB - origLB;
+		if (domain.type(col) == 'C')
+			spread *= (1.0 - domain.minContRed);
+		else
+			spread = std::max(spread - domain.feasTol, 0.0);
+		s.diameter = std::max(s.diameter, fabs(coef) * spread);
 	}
 }
 
 /* Reverse activity update by undoing a given bound change */
 void LinearPropagator::undoBoundChange(const Domain &domain, const BoundChange &bdchg)
 {
-	int j = bdchg.var;
+	const int col = bdchg.var;
 
-	for (const auto &[i, coef] : mip.cols[j])
-	{
-		State &s = states[i];
+	for (const auto &[row, coef] : mip.cols[col])
+		undoBoundChangeForEntry(domain, bdchg, row, coef);
 
-		/* Reset infeas status on backtrack */
-		s.infeas = false;
-
-		/* update diameter */
-		if (bdchg.type != BoundChange::Type::SHIFT)
-		{
-			double origLB = mip.lb[j];
-			double origUB = mip.ub[j];
-			FP_ASSERT(origUB >= origLB);
-			double spread = origUB - origLB;
-			if (domain.type(j) == 'C')
-				spread *= (1.0 - domain.minContRed);
-			else
-				spread = std::max(spread - domain.feasTol, 0.0);
-			s.diameter = std::max(s.diameter, fabs(coef) * spread);
-		}
-	}
+	const double obj_coef = mip.obj[col];
+	if (!iszero(obj_coef))
+		undoBoundChangeForEntry(domain, bdchg, mip.nrows, obj_coef);
 }
 
 void LinearPropagator::undo(const Domain &domain, Domain::iterator mark)
@@ -122,6 +144,7 @@ void LinearPropagator::undo(const Domain &domain, Domain::iterator mark)
 /* Propagate row i as a <= constraint */
 void LinearPropagator::propagateOneRowLessThan(PropagationEngine &engine, int i, double mult, double bound)
 {
+	const bool is_objective = (i == mip.nrows);
 	State &s = states[i];
 
 	FP_ASSERT((mult == 1.0) || (mult == -1.0));
@@ -154,10 +177,9 @@ void LinearPropagator::propagateOneRowLessThan(PropagationEngine &engine, int i,
 
 	/* Loop over the row and tighten variables */
 	bool infeas = false;
-	const auto &row = mip.rows[i];
-	const int *idx = row.idx();
-	const double *coefs = row.coef();
-	int size = row.size();
+	const int *idx = is_objective ? mip.obj_cols.data() : mip.rows[i].idx();
+	const double *coefs = is_objective ? mip.obj_coefs.data() : mip.rows[i].coef();
+	const size_t nnz = is_objective ? mip.obj_cols.size() : mip.rows[i].size();
 
 	/* First loop over binaries */
 	for (int k = 0; k < firstNonBin[i]; k++)
@@ -188,7 +210,7 @@ void LinearPropagator::propagateOneRowLessThan(PropagationEngine &engine, int i,
 		}
 	}
 	/* Then the rest */
-	for (int k = firstNonBin[i]; k < size; k++)
+	for (size_t k = firstNonBin[i]; k < nnz; k++)
 	{
 		int j = idx[k];
 		double coef = mult * coefs[k];
@@ -235,8 +257,9 @@ void LinearPropagator::propagateOneRowLessThan(PropagationEngine &engine, int i,
 /* propagate a single linear constraint */
 void LinearPropagator::propagateOneRow(PropagationEngine &engine, int i)
 {
-	char sense = mip.sense[i];
-	double rhs = mip.rhs[i];
+	const bool is_objective = (i == mip.nrows);
+	const char sense = is_objective ? obj_sense : mip.sense[i];
+	const double rhs = is_objective ? obj_rhs : mip.rhs[i];
 
 	bool rowHasLB = (sense != 'L');
 	bool rowHasUB = (sense != 'G');
@@ -284,6 +307,8 @@ void LinearPropagator::propagate(PropagationEngine &engine, Domain::iterator mar
 		/* Enqueue all rows */
 		for (int i = 0; i < mip.nrows; i++)
 			qrows.push(i);
+
+		qrows.push(mip.nrows); // The objective
 	}
 	else
 	{
@@ -302,6 +327,15 @@ void LinearPropagator::propagate(PropagationEngine &engine, Domain::iterator mar
 					continue;
 
 				qrows.push(i);
+			}
+
+			/* Potentially propagate the objective. */
+			const double obj_coef = mip.obj[j];
+			if (!iszero(obj_coef)) {
+				const State &s = states[mip.nrows];
+				if (!s.infeas) {
+					qrows.push(mip.nrows);
+				}
 			}
 		}
 	}

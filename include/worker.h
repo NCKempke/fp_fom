@@ -23,12 +23,14 @@ struct WorkerData
 public:
 	WorkerData(const MIPData &_mipdata) : mipdata{_mipdata}, engine{_mipdata.mip}, solpool(mipdata.mip.ncols, mipdata.mip.objSense, false)
 	{
+		const double obj_cutoff = mipdata.solpool.get_obj_cutoff();
+
 		// init propagation engine
 		const MIPInstance &mip = mipdata.mip;
 		engine.add(PropagatorPtr{new CliquesPropagator{mipdata.cliquetable}});
 		engine.add(PropagatorPtr{new ImplPropagator{mipdata.impltable}});
-		engine.add(PropagatorPtr{new LinearPropagator{mip}});
-		engine.init(mip.lb, mip.ub, mip.xtype);
+		engine.add(PropagatorPtr{new LinearPropagator{mip, obj_cutoff}});
+		engine.init(mip.lb, mip.ub, mip.xtype, obj_cutoff);
 		// clone LP relaxation
 		lp = mipdata.lp->clone();
 	}

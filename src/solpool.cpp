@@ -10,6 +10,7 @@ SolutionPool::SolutionPool(int ncols_, double objsense_, bool thread_safe_) : nc
 {
     /* Assert minimization problem. */
     FP_ASSERT(objsense == 1.0);
+    obj_cutoff.store(objsense * INFTY);
 }
 
 void SolutionPool::lock() const
@@ -129,6 +130,15 @@ void SolutionPool::add_unsafe(std::unique_ptr<Solution> sol, bool force) {
     auto insertPos = std::lower_bound(solution_rank.begin(), solution_rank.end(), sol, comp);
 
     if (force || std::distance(solution_rank.begin(), insertPos) < 10) {
+        if (insertPos == solution_rank.begin()) {
+            const double newobj = objsense * sol->objval;
+
+            FP_ASSERT(!sol->isFeas || objsense * sol->objval < get_obj_cutoff());
+            obj_cutoff.store(newobj);
+        } else {
+            FP_ASSERT(!sol->isFeas || objsense * sol->objval >= get_obj_cutoff());
+        }
+
         solution_rank.insert(insertPos, new_index);
         pool.push_back(std::move(sol));
     }

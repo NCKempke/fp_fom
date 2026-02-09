@@ -50,6 +50,20 @@ MIPInstance extract(MIPModelPtr model)
 
 	for (const auto &rhs : mip.rhs)
 		mip.maxRhs = std::max(std::abs(rhs), mip.maxRhs);
+
+	/* Extract sparse objective */
+	mip.obj_coefs.reserve(mip.ncols);
+	mip.obj_cols.reserve(mip.ncols);
+
+	for (int jcol = 0; jcol < mip.ncols; ++jcol) {
+		const double coef = mip.obj[jcol];
+
+		if (!iszero(coef)) {
+			mip.obj_coefs.push_back(coef);
+			mip.obj_cols.push_back(jcol);
+		}
+	}
+
 	return mip;
 }
 

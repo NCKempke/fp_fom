@@ -149,6 +149,12 @@ void WalkMIP::walk()
 
 		std::uniform_int_distribution<int> uniformRow(0, violated.size() - 1);
 		int violrow = violated[uniformRow(rndgen)];
+
+		if (violrow == mip.nrows) {
+			consoleError("Cannot repair objective currently!");
+			continue;
+		}
+
 		const auto &row = mip.rows[violrow];
 		const int *indices = row.idx();
 		const double *coefs = row.coef();

@@ -52,11 +52,16 @@ struct MIPInstance
 	std::vector<double> lb;
 	std::vector<double> ub;
 
+	/* Sparse Objective info. */
+	std::vector<double> obj_coefs;
+	std::vector<int> obj_cols;
+
 	SparseMatrix cols;
 	// row data
 	std::vector<char> sense;
 	std::vector<double> rhs;
 	SparseMatrix rows;
+
 	// names (for debugging and output)
 	std::vector<std::string> rNames;
 	std::vector<std::string> cNames;

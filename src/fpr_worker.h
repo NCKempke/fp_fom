@@ -30,12 +30,14 @@ struct WorkerFprState
 public:
 	WorkerFprState(const MIPData &mipdata_, MIPModelPtr lp_) : mipdata{mipdata_}, engine{mipdata_.mip}, lp(lp_)
 	{
+        const double obj_cutoff = mipdata.solpool.get_obj_cutoff();
+
         /* Initialize this worker's propagation engine. */
         const MIPInstance &mip = mipdata.mip;
 		engine.add(PropagatorPtr{new CliquesPropagator{mipdata.cliquetable}});
 		engine.add(PropagatorPtr{new ImplPropagator{mipdata.impltable}});
-		engine.add(PropagatorPtr{new LinearPropagator{mip}});
-		engine.init(mip.lb, mip.ub, mip.xtype);
+		engine.add(PropagatorPtr{new LinearPropagator{mip, obj_cutoff}});
+		engine.init(mip.lb, mip.ub, mip.xtype, obj_cutoff);
 	}
 	// data
 	const MIPData &mipdata;

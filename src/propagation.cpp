@@ -217,10 +217,10 @@ void Domain::undo(Domain::iterator mark)
 	FP_ASSERT(changesEnd() == mark);
 }
 
-PropagationEngine::PropagationEngine(const MIPInstance& mip_) : mip(mip_),
-															 minAct(mip.nrows),
-															 maxAct(mip.nrows),
-															 violated(mip.nrows) {}
+PropagationEngine::PropagationEngine(const MIPInstance& mip_) : mip(mip_), obj_sense{mip_.objSense == 1.0 ? 'L' : 'G'},
+															 minAct(mip.nrows + 1),
+															 maxAct(mip.nrows + 1),
+															 violated(mip.nrows + 1) {}
 
 PropagatorPtr PropagationEngine::getPropagator(const std::string &name) const
 {
@@ -237,16 +237,18 @@ static inline bool needsRecomputation(double oldValue, double newValue)
 	return (fabs(newValue) < (fabs(oldValue) * 1e-3));
 }
 
-void PropagationEngine::init(std::span<const double> _lb, std::span<const double> _ub, std::span<const char> _xtype)
+void PropagationEngine::init(std::span<const double> _lb, std::span<const double> _ub, std::span<const char> _xtype, double obj_cutoff)
 {
+	obj_rhs = obj_cutoff - mip.objOffset;
+
 	/* Initialize domain */
 	FP_ASSERT(_lb.size() == _ub.size());
 	FP_ASSERT(_ub.size() == _xtype.size());
 	domain.init(_lb, _ub, _xtype);
 	domain.cNames = mip.cNames;
 
-	/* Evaluate current mininimum and maximum activities for each row */
-	int m = mip.nrows;
+	/* Evaluate current minimum and maximum activities for each row */
+	int m = mip.nrows + 1;
 	for (int i = 0; i < m; i++)
 	{
 		recomputeRowActivity(i);
@@ -258,6 +260,39 @@ void PropagationEngine::init(std::span<const double> _lb, std::span<const double
 	/* Initialize propagators */
 	for (const auto &prop : propagators)
 		prop->init(domain);
+}
+
+double PropagationEngine::changeLowerBoundRow(int row, double coef, double delta) {
+	const bool is_objective = (row == mip.nrows);
+	const char sense = is_objective ? obj_sense : mip.sense[row];
+	const double rhs = is_objective ? obj_rhs : mip.rhs[row];
+
+	double oldViol = rowViol(minAct[row], maxAct[row], sense, rhs);
+	bool recomp = false;
+	if (coef > 0.0)
+	{
+		double oldAct = minAct[row];
+		minAct[row] += (coef * delta);
+		recomp |= needsRecomputation(oldAct, minAct[row]);
+	}
+	else
+	{
+		double oldAct = maxAct[row];
+		maxAct[row] += (coef * delta);
+		recomp |= needsRecomputation(oldAct, maxAct[row]);
+	}
+	if (recomp)
+		recomputeRowActivity(row);
+	double newViol = rowViol(minAct[row], maxAct[row], sense, rhs);
+	if (newViol > domain.feasTol)
+		violated.add(row);
+	else
+		violated.remove(row);
+
+#ifdef DEBUG_EXPENSIVE
+	debugCheckRow(i);
+#endif
+	return newViol - oldViol;
 }
 
 bool PropagationEngine::changeLowerBound(int var, double newBound)
@@ -274,40 +309,54 @@ bool PropagationEngine::changeLowerBound(int var, double newBound)
 	double delta = newBound - oldBound;
 
 	double deltaViol = 0.0;
-	for (const auto &[i, coef] : mip.cols[var])
-	{
-		double oldViol = rowViol(minAct[i], maxAct[i], mip.sense[i], mip.rhs[i]);
-		bool recomp = false;
-		if (coef > 0.0)
-		{
-			double oldAct = minAct[i];
-			minAct[i] += (coef * delta);
-			recomp |= needsRecomputation(oldAct, minAct[i]);
-		}
-		else
-		{
-			double oldAct = maxAct[i];
-			maxAct[i] += (coef * delta);
-			recomp |= needsRecomputation(oldAct, maxAct[i]);
-		}
-		if (recomp)
-			recomputeRowActivity(i);
-		double newViol = rowViol(minAct[i], maxAct[i], mip.sense[i], mip.rhs[i]);
-		if (newViol > domain.feasTol)
-			violated.add(i);
-		else
-			violated.remove(i);
-		deltaViol += (newViol - oldViol);
-#ifdef DEBUG_EXPENSIVE
-		debugCheckRow(i);
-#endif
-	}
+
+	for (const auto &[row, coef] : mip.cols[var])
+		deltaViol += changeLowerBoundRow(row, coef, delta);
+
+	const double obj_coef = mip.obj[var];
+	if (!iszero(obj_coef))
+		deltaViol += changeLowerBoundRow(mip.nrows, obj_coef, delta);
+
 	double oldTotViol = totViol;
 	totViol += deltaViol;
 	if (needsRecomputation(oldTotViol, totViol))
 		recomputeViolation();
 
 	return infeas;
+}
+
+double PropagationEngine::changeUpperBoundRow(int row, double coef, double delta) {
+	const bool is_objective = (row == mip.nrows);
+	const char sense = is_objective ? obj_sense : mip.sense[row];
+	const double rhs = is_objective ? obj_rhs : mip.rhs[row];
+
+	double oldViol = rowViol(minAct[row], maxAct[row], sense, rhs);
+	bool recomp = false;
+	if (coef < 0.0)
+	{
+		double oldAct = minAct[row];
+		minAct[row] += (coef * delta);
+		recomp |= needsRecomputation(oldAct, minAct[row]);
+	}
+	else
+	{
+		double oldAct = maxAct[row];
+		maxAct[row] += (coef * delta);
+		recomp |= needsRecomputation(oldAct, maxAct[row]);
+	}
+	if (recomp)
+		recomputeRowActivity(row);
+
+	double newViol = rowViol(minAct[row], maxAct[row], sense, rhs);
+	if (newViol > domain.feasTol)
+		violated.add(row);
+	else
+		violated.remove(row);
+
+#ifdef DEBUG_EXPENSIVE
+	debugCheckRow(i);
+#endif
+	return newViol - oldViol;
 }
 
 bool PropagationEngine::changeUpperBound(int var, double newBound)
@@ -324,34 +373,13 @@ bool PropagationEngine::changeUpperBound(int var, double newBound)
 	double delta = newBound - oldBound;
 
 	double deltaViol = 0.0;
-	for (const auto &[i, coef] : mip.cols[var])
-	{
-		double oldViol = rowViol(minAct[i], maxAct[i], mip.sense[i], mip.rhs[i]);
-		bool recomp = false;
-		if (coef < 0.0)
-		{
-			double oldAct = minAct[i];
-			minAct[i] += (coef * delta);
-			recomp |= needsRecomputation(oldAct, minAct[i]);
-		}
-		else
-		{
-			double oldAct = maxAct[i];
-			maxAct[i] += (coef * delta);
-			recomp |= needsRecomputation(oldAct, maxAct[i]);
-		}
-		if (recomp)
-			recomputeRowActivity(i);
-		double newViol = rowViol(minAct[i], maxAct[i], mip.sense[i], mip.rhs[i]);
-		if (newViol > domain.feasTol)
-			violated.add(i);
-		else
-			violated.remove(i);
-		deltaViol += (newViol - oldViol);
-#ifdef DEBUG_EXPENSIVE
-		debugCheckRow(i);
-#endif
-	}
+	for (const auto &[row, coef] : mip.cols[var])
+		deltaViol += changeUpperBoundRow(row, coef, delta);
+
+	const double obj_coef = mip.obj[var];
+	if (!iszero(obj_coef))
+		deltaViol += changeUpperBoundRow(mip.nrows, obj_coef, delta);
+
 	double oldTotViol = totViol;
 	totViol += deltaViol;
 	if (needsRecomputation(oldTotViol, totViol))
@@ -369,6 +397,35 @@ bool PropagationEngine::fix(int var, double value)
 	return infeas;
 }
 
+double PropagationEngine::shift_row(int row, double coef, double delta) {
+	const bool is_objective = (row == mip.nrows);
+	const char sense = is_objective ? obj_sense : mip.sense[row];
+	const double rhs = is_objective ? obj_rhs : mip.rhs[row];
+
+	double oldViol = rowViol(minAct[row], maxAct[row], sense, rhs);
+	bool recomp = false;
+
+	double oldMinAct = minAct[row];
+	minAct[row] += (coef * delta);
+	recomp |= needsRecomputation(oldMinAct, minAct[row]);
+
+	double oldMaxAct = maxAct[row];
+	maxAct[row] += (coef * delta);
+	recomp |= needsRecomputation(oldMaxAct, maxAct[row]);
+	if (recomp)
+		recomputeRowActivity(row);
+	double newViol = rowViol(minAct[row], maxAct[row], sense, rhs);
+	if (newViol > domain.feasTol)
+		violated.add(row);
+	else
+		violated.remove(row);
+
+#ifdef DEBUG_EXPENSIVE
+	debugCheckRow(row);
+#endif
+	return newViol - oldViol;
+}
+
 void PropagationEngine::shift(int var, double newValue)
 {
 	FP_ASSERT(domain.lb(var) == domain.ub(var));
@@ -382,28 +439,13 @@ void PropagationEngine::shift(int var, double newValue)
 	double delta = newValue - oldValue;
 
 	double deltaViol = 0.0;
-	for (const auto &[i, coef] : mip.cols[var])
-	{
-		double oldViol = rowViol(minAct[i], maxAct[i], mip.sense[i], mip.rhs[i]);
-		bool recomp = false;
-		double oldMinAct = minAct[i];
-		minAct[i] += (coef * delta);
-		recomp |= needsRecomputation(oldMinAct, minAct[i]);
-		double oldMaxAct = maxAct[i];
-		maxAct[i] += (coef * delta);
-		recomp |= needsRecomputation(oldMaxAct, maxAct[i]);
-		if (recomp)
-			recomputeRowActivity(i);
-		double newViol = rowViol(minAct[i], maxAct[i], mip.sense[i], mip.rhs[i]);
-		if (newViol > domain.feasTol)
-			violated.add(i);
-		else
-			violated.remove(i);
-		deltaViol += (newViol - oldViol);
-#ifdef DEBUG_EXPENSIVE
-		debugCheckRow(i);
-#endif
-	}
+	for (const auto &[row, coef] : mip.cols[var])
+		deltaViol += shift_row(row, coef, delta);
+
+	const double obj_coef = mip.obj[var];
+	if (!iszero(obj_coef))
+		deltaViol += shift_row(mip.nrows, obj_coef, delta);
+
 	double oldTotViol = totViol;
 	totViol += deltaViol;
 	if (needsRecomputation(oldTotViol, totViol))
@@ -515,6 +557,52 @@ bool PropagationEngine::directImplications()
 	return false;
 }
 
+double PropagationEngine::undo_row(const BoundChange& bdchg, int row, double coef, double delta) {
+	const bool is_objective = (row == mip.nrows);
+	const char sense = is_objective ? obj_sense : mip.sense[row];
+	const double rhs = is_objective ? obj_rhs : mip.rhs[row];
+
+	double oldViol = rowViol(minAct[row], maxAct[row], sense, rhs);
+	double oldMinAct = minAct[row];
+	double oldMaxAct = maxAct[row];
+	switch (bdchg.type)
+	{
+	case BoundChange::Type::SHIFT:
+		minAct[row] -= (coef * delta);
+		maxAct[row] -= (coef * delta);
+		break;
+	case BoundChange::Type::UPPER:
+		if (coef > 0.0)
+			maxAct[row] -= (coef * delta);
+		else
+			minAct[row] -= (coef * delta);
+		break;
+	case BoundChange::Type::LOWER:
+		if (coef > 0.0)
+			minAct[row] -= (coef * delta);
+		else
+			maxAct[row] -= (coef * delta);
+		break;
+	default:
+		FP_ASSERT(false);
+	}
+	if (needsRecomputation(oldMinAct, minAct[row]) ||
+		needsRecomputation(oldMaxAct, maxAct[row]))
+	{
+		recomputeRowActivity(row);
+	}
+	double newViol = rowViol(minAct[row], maxAct[row], sense, rhs);
+	if (newViol > domain.feasTol)
+		violated.add(row);
+	else
+		violated.remove(row);
+#ifdef DEBUG_EXPENSIVE
+	debugCheckRow(row);
+#endif
+
+	return (newViol - oldViol);
+}
+
 void PropagationEngine::undo(Domain::iterator mark)
 {
 	/* Backtrack propagators' states */
@@ -536,50 +624,16 @@ void PropagationEngine::undo(Domain::iterator mark)
 		BoundChange bdchg = domain.lastChange();
 		domain.undoLast();
 		double delta = bdchg.value - bdchg.oldValue;
-		int j = bdchg.var;
+		int var = bdchg.var;
 
 		double deltaViol = 0.0;
-		for (const auto &[i, coef] : mip.cols[j])
-		{
-			double oldViol = rowViol(minAct[i], maxAct[i], mip.sense[i], mip.rhs[i]);
-			double oldMinAct = minAct[i];
-			double oldMaxAct = maxAct[i];
-			switch (bdchg.type)
-			{
-			case BoundChange::Type::SHIFT:
-				minAct[i] -= (coef * delta);
-				maxAct[i] -= (coef * delta);
-				break;
-			case BoundChange::Type::UPPER:
-				if (coef > 0.0)
-					maxAct[i] -= (coef * delta);
-				else
-					minAct[i] -= (coef * delta);
-				break;
-			case BoundChange::Type::LOWER:
-				if (coef > 0.0)
-					minAct[i] -= (coef * delta);
-				else
-					maxAct[i] -= (coef * delta);
-				break;
-			default:
-				FP_ASSERT(false);
-			}
-			if (needsRecomputation(oldMinAct, minAct[i]) ||
-				needsRecomputation(oldMaxAct, maxAct[i]))
-			{
-				recomputeRowActivity(i);
-			}
-			double newViol = rowViol(minAct[i], maxAct[i], mip.sense[i], mip.rhs[i]);
-			if (newViol > domain.feasTol)
-				violated.add(i);
-			else
-				violated.remove(i);
-			deltaViol += (newViol - oldViol);
-#ifdef DEBUG_EXPENSIVE
-			debugCheckRow(i);
-#endif
-		}
+		for (const auto &[row, coef] : mip.cols[var])
+			deltaViol += undo_row(bdchg, row, coef, delta);
+
+		const double obj_coef = mip.obj[var];
+		if (!iszero(obj_coef))
+			deltaViol += undo_row(bdchg, mip.nrows, obj_coef, delta);
+
 		totViol += deltaViol;
 	}
 	FP_ASSERT(domain.changesEnd() == mark);
@@ -611,30 +665,43 @@ void PropagationEngine::disableAll()
 /* Compute current violation and set of violated constraints */
 void PropagationEngine::recomputeViolation()
 {
-	int m = mip.nrows;
+	int m = mip.nrows + 1;
 	violated.clear();
 	totViol = 0.0;
-	for (int i = 0; i < m; i++)
+	for (int row = 0; row < m; ++row)
 	{
-		double viol = rowViol(minAct[i], maxAct[i], mip.sense[i], mip.rhs[i]);
+		const bool is_objective = (row == mip.nrows);
+		const double rhs = is_objective ? obj_rhs : mip.rhs[row];
+		const char sense = is_objective ? obj_sense : mip.sense[row];
+
+		double viol = rowViol(minAct[row], maxAct[row], sense, rhs);
 		FP_ASSERT(viol >= 0.0);
 
 		totViol += viol;
 		if (viol > domain.feasTol)
 		{
 			// consoleLog("Violation detected at i = {}", i);
-			violated.add(i);
+			violated.add(row);
 		}
 	}
 	// consoleLog("Total violation = {}", totViol);
 }
 
-void PropagationEngine::computeActivity(int i, double &minA, double &maxA) const
+void PropagationEngine::computeActivity(int row, double &minA, double &maxA) const
 {
+	const bool is_objective = (row == mip.nrows);
 	minA = 0.0;
 	maxA = 0.0;
-	for (const auto &[var, coef] : mip.rows[i])
+
+	const int *idx = is_objective ? mip.obj_cols.data() : mip.rows[row].idx();
+	const double *coefs = is_objective ? mip.obj_coefs.data() : mip.rows[row].coef();
+	const size_t nnz = is_objective ? mip.obj_cols.size() : mip.rows[row].size();
+
+	for (size_t inz = 0; inz < nnz; ++inz)
 	{
+		const int var = idx[inz];
+		const double coef = coefs[inz];
+
 		FP_ASSERT((var >= 0) && (var < mip.ncols));
 		FP_ASSERT(coef != 0.0);
 		double lb = domain.lb(var);
@@ -655,20 +722,25 @@ void PropagationEngine::computeActivity(int i, double &minA, double &maxA) const
 	}
 }
 
-void PropagationEngine::debugCheckRow(int i) const
+void PropagationEngine::debugCheckRow(int row) const
 {
+	const bool is_objective = (row == mip.nrows);
 	double minA;
 	double maxA;
-	computeActivity(i, minA, maxA);
-	FP_ASSERT(relEqual(minA, minAct[i], domain.zeroTol));
-	FP_ASSERT(relEqual(maxA, maxAct[i], domain.zeroTol));
-	double viol = rowViol(minAct[i], maxAct[i], mip.sense[i], mip.rhs[i]);
-	FP_ASSERT((viol > domain.feasTol) == violated.has(i));
+	computeActivity(row, minA, maxA);
+	FP_ASSERT(relEqual(minA, minAct[row], domain.zeroTol));
+	FP_ASSERT(relEqual(maxA, maxAct[row], domain.zeroTol));
+
+	const char sense = is_objective ? obj_sense : mip.sense[row];
+	const double rhs = is_objective ? obj_rhs : mip.rhs[row];
+
+	double viol = rowViol(minAct[row], maxAct[row], sense, rhs);
+	FP_ASSERT((viol > domain.feasTol) == violated.has(row));
 }
 
 void PropagationEngine::debugChecks() const
 {
-	int m = mip.nrows;
+	int m = mip.nrows + 1;
 	for (int i = 0; i < m; i++)
 		debugCheckRow(i);
 }

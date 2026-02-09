@@ -429,12 +429,14 @@ protected:
 		data.lp->switchToLP();
 
 		/* Initialized propagators and do one round of propagation. */
+		const double obj_cutoff = data.solpool.get_obj_cutoff();
+
 		const MIPInstance &mip = data.mip;
 		PropagationEngine engine{mip};
 		engine.add(PropagatorPtr{new CliquesPropagator{data.cliquetable}});
 		engine.add(PropagatorPtr{new ImplPropagator{data.impltable}});
-		engine.add(PropagatorPtr{new LinearPropagator{mip}});
-		engine.init(mip.lb, mip.ub, mip.xtype);
+		engine.add(PropagatorPtr{new LinearPropagator{mip, obj_cutoff}});
+		engine.init(mip.lb, mip.ub, mip.xtype, obj_cutoff);
 		const Domain &domain = engine.getDomain();
 		bool infeas = engine.propagate(true);
 		FP_ASSERT(!infeas);
