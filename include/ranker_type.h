@@ -29,6 +29,7 @@ enum class RankerType
     FRAC_BREAK_DUALS,
     FRAC_BREAK_REDCOSTS,
     REDCOSTS_BREAK_FRAC,
+    ROW_VIOLATION,
     UNKNOWN,
 };
 
@@ -37,6 +38,9 @@ RankerType RankerTypeFromString(const std::string &str);
 
 /* Whether a certain ranker needs to solve an LP to function. */
 bool rankerNeedsLpSolve(RankerType ranker);
+
+/* Whether a certain ranker needs a partial solution to function. */
+bool rankerNeedsPartial(RankerType ranker);
 
 /* Whether a certain ranker needs a clique cover. */
 bool rankerNeedsCliqueCover(RankerType ranker);

@@ -26,7 +26,9 @@ static const std::unordered_map<std::string, ValueChooserType> valueChooserTypeM
     {"down", ValueChooserType::DOWN},
     {"random_up_down", ValueChooserType::RANDOM_UP_DOWN},
     {"round_int", ValueChooserType::ROUND_INT},
-    {"split", ValueChooserType::SPLIT}};
+    {"split", ValueChooserType::SPLIT},
+    {"random_guided", ValueChooserType::RANDOM_GUIDED}
+};
 
 ValueChooserType ValueChooserTypeFromString(const std::string &str)
 {
@@ -46,6 +48,11 @@ ValueChooserType ValueChooserTypeFromString(const std::string &str)
 bool valueChooserNeedsLpSolve(ValueChooserType valueChooser)
 {
     return (valueChooser == ValueChooserType::RANDOM_LP || valueChooser == ValueChooserType::ROUND_INT);
+}
+
+/* Wether a certain value chooser needs a partial solution to function. */
+bool valueChooserNeedsPartial(ValueChooserType valueChooser) {
+    return (valueChooser == ValueChooserType::RANDOM_GUIDED);
 }
 
 std::string toString(ValueChooserType valueChooser)
@@ -74,6 +81,8 @@ std::string toString(ValueChooserType valueChooser)
         return "ROUND_INT";
     case ValueChooserType::SPLIT:
         return "SPLIT";
+    case ValueChooserType::RANDOM_GUIDED:
+        return "RANDOM_GUIDED";
     default:
         return "UNKNOWN"; // Fallback case
     }

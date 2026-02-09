@@ -31,7 +31,8 @@ public:
     SolutionPool() = delete;
     SolutionPool(int ncols_, double objsense_ /** 1.0 == MIN; -1.0 == MAX */, bool thread_safe);
 
-    void add(std::unique_ptr<Solution> sol);
+    /* Add solution to pool; if force == true, always add the solution. */
+    void add(std::unique_ptr<Solution> sol, bool force = false);
 
     /* Return a const reference to the solution at index n. The index must be valid! */
     const Solution& getSol(int idx) const;
@@ -69,8 +70,8 @@ private:
     /* Check for feasible solution without locking mutex. */
     bool has_feas_unsafe() const;
 
-    /* Add solution to pool without locking mutex. */
-    void add_unsafe(std::unique_ptr<Solution> sol);
+    /* Add solution to pool without locking mutex. If force == true, always add the solution. */
+    void add_unsafe(std::unique_ptr<Solution> sol, bool force = false);
 
     struct LockGuard {
         const SolutionPool& pool;

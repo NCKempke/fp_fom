@@ -878,7 +878,7 @@ std::vector<double> solveLP(MIPModelPtr model, const Params &params, bool enable
 }
 
 /* Constructor used by mipcomp binary. Initialize solution pool as thread-safe*/
-MIPData::MIPData(MIPInstance&& mip_, MIPModelPtr lp_solver, bool build_clique_cover) : mip(std::move(mip_)), lp(lp_solver), solpool(mip.ncols, mip.objSense, true) {
+MIPData::MIPData(MIPInstance&& mip_, MIPModelPtr lp_solver, bool build_clique_cover) : mip(std::move(mip_)), lp(lp_solver), solpool(mip.ncols, mip.objSense, true), partials(mip.ncols, mip.objSense, false) {
 	dualBound = -INFTY * mip.objSense;
 
 	// normalize rows
@@ -900,7 +900,7 @@ MIPData::MIPData(MIPInstance&& mip_, MIPModelPtr lp_solver, bool build_clique_co
 }
 
 // Init MIP Data from a MIP model
-MIPData::MIPData(MIPModelPtr model, bool build_clique_cover) : mip(extract(model)), solpool(mip.ncols, mip.objSense, false)
+MIPData::MIPData(MIPModelPtr model, bool build_clique_cover) : mip(extract(model)), solpool(mip.ncols, mip.objSense, false), partials(mip.ncols, mip.objSense, false)
 {
 	dualBound = -INFTY * mip.objSense;
 

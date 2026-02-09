@@ -22,6 +22,7 @@
 #include "timer.h"
 #include "cub/cub.cuh"
 
+extern int UserBreak;
 
 /* We submit blocks with WARPS_PER_BLOCK many warps. Each warp is responsible for computing N_MOVES_PER_WARP many moves.
  * To compute n_moves of a certain move type, we need to submit
@@ -33,10 +34,12 @@
 constexpr int BLOCKSIZE_MOVE = 256;
 
 constexpr int LP_SOLUTION_FREQ = 1000;
-constexpr int SOLUTION_TRANSFER_FREQ = 1000;
+constexpr int SOLUTION_TRANSFER_FREQ = 10;
 constexpr int SOLUTION_IMPORT_FREQ = 1000;
 constexpr int MAX_VALUE_HUGE = 1000;
 constexpr int RECOMPUTE_SOL_METRICS_FREQ = SOLUTION_TRANSFER_FREQ / 10;
+
+static_assert(SOLUTION_TRANSFER_FREQ % RECOMPUTE_SOL_METRICS_FREQ == 0);
 
 constexpr int N_WARPS_PER_BLOCK = BLOCKSIZE_MOVE / WARP_SIZE;
 static_assert(BLOCKSIZE_MOVE % WARP_SIZE == 0);
@@ -169,9 +172,11 @@ __device__ void warp_sample_range(int* draws, int beg, int end, size_t seed)
  * - one_opt (greedy) : push variable in direction of its objective
  * - flip             : flips a binary randomly selected variable
  * - random           : selects a random variable and assigns it a random value
- * - mtm_satisfied    : select a random satisfied constraint and set slack to zero
+ * - mtm_satisfied    : select a random satisfied constraint and set slack to zero; iterates all variables
+ *                      of the constraint to find the best candidate
  * - mtm_unsatisfied  : selects a random violated constraint, then selects a variable within its range
- *                      and adjusts it to make the constraint as feasible as possible
+ *                      to make the constraint as feasible as possible; iterates all variables of the
+ *                      constraint to find the best candidate
  *
  * TODO:
  * - swap             : select two (binary) variables with different values and swap them
@@ -1221,7 +1226,7 @@ void recompute_solution_metrics(TabuSearchDataDevice &data_device, TabuSearchKer
             return !is_eq_feas(x, 0) ? fabs(x) : 0.0;
         },
         0.0,
-        thrust::plus<double>()
+        cuda::std::plus<double>()
     );
 
     /* calculate violations for ineq*/
@@ -1233,7 +1238,7 @@ void recompute_solution_metrics(TabuSearchDataDevice &data_device, TabuSearchKer
             return is_lt_feas(x, 0) ? fabs(x) : 0.0;
         },
         sum_viol,
-        thrust::plus<double>()
+        cuda::std::plus<double>()
     );
     /* update objective */
     args_device.objective = thrust_dot_product(data_device.sol, model_device.objective);
@@ -1400,7 +1405,6 @@ int getSolutionSlot(const std::vector<bool> &active_solutions) {
 
 std::unique_ptr<Solution> make_sol_from_thrust_vector(const MIPInstance &mip, thrust::device_vector<double> x, const double obj_val, const bool isFeas, const double violation)
 {
-    assert(isFeas);
     auto sol = std::make_unique<Solution>();
     sol->x.insert(sol->x.end(), x.begin(), x.end());
     sol->objval = obj_val;
@@ -1413,6 +1417,23 @@ std::unique_ptr<Solution> make_sol_from_thrust_vector(const MIPInstance &mip, th
     return sol;
 }
 
+/* Check whether it seems worth to copy the current solution back to device and pass it to FPR. */
+void EvolutionSearch::try_store_partial_solution_for_fpr(MIPData &data, const TabuSearchDataDevice& data_device, const TabuSearchKernelArgs& args_device, int sol_idx)
+{
+    /* We only add infeasible solutions. */
+    if (args_device.is_found_feasible)
+        return;
+
+    auto& partials = data.partials;
+
+    /* If our solution has a better objective than the best one in the pool, add it. */
+    if (partials.n_sols() == 0 || partials.getSol(0).objval > args_device.objective) {
+        consoleInfo("\tSol{} : Moving solution to partial pool", sol_idx);
+
+        auto sol = make_sol_from_thrust_vector(data.mip, data_device.sol, args_device.objective, args_device.sum_viol, false);
+        partials.add(std::move(sol), true);
+    }
+}
 
 void EvolutionSearch::run(MIPData &data) {
     int seed = 0;
@@ -1436,7 +1457,7 @@ void EvolutionSearch::run(MIPData &data) {
     auto gpu_model_ptrs = model_device.get_ptrs();
 
     int max_solutions = 10;
-    std::vector active_solutions (max_solutions, false);
+    std::vector<bool> active_solutions (max_solutions, false);
     // Data devices and kernel args
     std::vector<TabuSearchDataDevice> data_devices;
     data_devices.reserve(max_solutions);
@@ -1495,14 +1516,13 @@ void EvolutionSearch::run(MIPData &data) {
 
     bool lp_solution_loaded = false;
     for (int i_round = 0; i_round < n_rounds; ++i_round) {
-
-
-
         if ( !lp_solution_loaded && i_round % LP_SOLUTION_FREQ == 0 ) {
-
-            load_lp_solution(3, data, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure, [] __host__ __device__ (const double x) { return floor(x); });
-            load_lp_solution(4, data, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure, [] __host__ __device__ (const double x) { return ceil(x); });
-            lp_solution_loaded = true;
+            /* Check whether the LP is ready yet. */
+            if (data.lp_solution_ready.load(std::memory_order_acquire)) {
+                load_lp_solution(3, data, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure, [] __host__ __device__ (const double x) { return floor(x); });
+                load_lp_solution(4, data, data_devices, args_devices, active_solutions, gpu_model_ptrs, model_device, model_host, tabu_tenure, [] __host__ __device__ (const double x) { return ceil(x); });
+                lp_solution_loaded = true;
+            }
         }
 
         if (i_round % SOLUTION_IMPORT_FREQ == 0) {
@@ -1646,22 +1666,9 @@ void EvolutionSearch::run(MIPData &data) {
             if (i_round > 0 && i_round % SOLUTION_IMPORT_FREQ == 0) {
 
             }
-            // TODO: make 100 a #define
+
             if (i_round > 0 && i_round % SOLUTION_TRANSFER_FREQ == 0) {
-                // ensure that the solution metrics are updated
-                // assert(RECOMPUTE_SOL_METRICS_FREQ % SOLUTION_TRANSFER_FREQ == 0);
-                /* TODO: Check whether our partial solution's objective is good enough to be stored in the partial solutions pool. */
-                thrust::host_vector<double> sol_host = data_device.sol; /* Copy back solution. */
-
-                consoleInfo("\tSol{} : Moving solution to partial pool", solution_index);
-                auto sol = std::make_unique<Solution>();
-                sol->x.insert(sol->x.end(), sol_host.begin(), sol_host.end());
-                sol->objval = args_device.objective; // TODO recompute
-                sol->isFeas = false; // TODO only a hack
-                sol->absViolation = args_device.sum_viol; // TODO only a hack
-                sol->relViolation = sol->absViolation / model_host.maxRhs;
-
-                partials.add(std::move(sol));
+                try_store_partial_solution_for_fpr(data, data_device, args_device, solution_index);
             }
 
 #ifdef EXTENDED_DEBUG
@@ -1678,7 +1685,7 @@ void EvolutionSearch::run(MIPData &data) {
                     return !is_eq_feas(x, 0) ? fabs(x) : 0.0;
                 },
                 0.0,
-                thrust::plus<double>()
+                cuda::std::plus<double>()
             );
 
             /* calculate violations for ineq*/
@@ -1690,10 +1697,15 @@ void EvolutionSearch::run(MIPData &data) {
                     return is_lt_feas(x, 0) ? fabs(x) : 0.0;
                 },
                 aux_sol_viol,
-                thrust::plus<double>()
+                cuda::std::plus<double>()
             );
             assert(is_eq_feas(aux_sol_viol, args_device.sum_viol));
 #endif
+
+            if (UserBreak) {
+                consoleInfo("User break; stopping evolution search");
+                return;
+            }
         }
     }
 };

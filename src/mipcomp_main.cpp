@@ -336,7 +336,6 @@ protected:
 
 		/* We keep 2 solution pools. One for storing our solutions from all threads, one for communicating partial, infeasible solutions from
 		 * evolution search to fpr. */
-		SolutionPool partials(mip.ncols, mip.objSense, true);
 
 		/* We run this thread + params.threads - 1 threads. */
 		ThreadPool thread_pool(params.threads - 1);
@@ -353,7 +352,9 @@ protected:
 			{RankerType::DUALS, ValueChooserType::RANDOM_LP},
 			{RankerType::RANDOM, ValueChooserType::RANDOM_LP},
 			{RankerType::REDCOSTS, ValueChooserType::RANDOM_LP},
-			{RankerType::TYPE, ValueChooserType::RANDOM_LP}
+			{RankerType::TYPE, ValueChooserType::RANDOM_LP},
+			{RankerType::TYPE, ValueChooserType::RANDOM_GUIDED},
+			{RankerType::ROW_VIOLATION, ValueChooserType::RANDOM_GUIDED},
 		};
 
 		std::vector<std::unique_ptr<std::atomic<bool>>> worker_flags = submit_fpr_workers(*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, finish_time, 5, params);
@@ -375,7 +376,7 @@ protected:
 		GpuModel gpu_data(mip);
 
 		consoleInfo("Running evo search");
-		EvolutionSearch evo_search(mip, gpu_data, partials);
+		EvolutionSearch evo_search(mip, gpu_data);
 		evo_search.run(*mip_data);
 
 		// TODO: now, check the pool for new incumbents and write these out + write the timing file. Also, check for the finished root LP thread. Either start one more FPR or resolve the root LP to higher accuracy? Though this messes with GPU ..
