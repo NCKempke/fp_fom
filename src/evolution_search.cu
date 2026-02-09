@@ -19,6 +19,7 @@
 #include <thrust/partition.h>
 #include <thrust/sequence.h>
 
+#include "timer.h"
 #include "cub/cub.cuh"
 
 
@@ -485,7 +486,7 @@ __device__ move_score compute_score_col_swap(const GpuModelPtrs &model, const Ta
     using BlockReduce = cub::BlockReduce<double, BLOCKSIZE_MOVE>;
 
     /* Allocate shared memory for BlockReduce. */
-    __shared__ typename BlockReduce::TempStorage temp_storage;
+    __shared__ BlockReduce::TempStorage temp_storage;
 
     /* Reduce all slack changes to thread 0 of this block. */
     const double slack_change = BlockReduce(temp_storage).Sum(slack_change_thread);
@@ -1024,7 +1025,7 @@ __global__ void apply_move(const GpuModelPtrs model, const TabuSearchKernelArgs 
     const int thread_idx = threadIdx.x;
     const double val = best_move->val;
     const int col = best_move->col;
-    const double obj = model.objective[col];
+    // const double obj = model.objective[col];
 
     const double old_val = args.sol[col];
     assert(model.lb[col] <= val && val <= model.ub[col]);
@@ -1389,6 +1390,21 @@ void launch_move_kernels_to_stream(
     }
 }
 
+std::unique_ptr<Solution> make_sol_from_thrust_vector(const MIPInstance &mip, thrust::device_vector<double> x, const double obj_val, const bool isFeas, const double violation)
+{
+    assert(isFeas);
+    auto sol = std::make_unique<Solution>();
+    sol->x.insert(sol->x.end(), x.begin(), x.end());
+    sol->objval = obj_val;
+    FP_ASSERT(equal(sol->objval, evalObj(mip, sol->x)));
+    sol->isFeas = isFeas;
+    FP_ASSERT(sol->isFeas == isSolFeasible(mip, sol->x));
+    sol->absViolation = violation;
+    sol->relViolation = violation / mip.maxRhs;
+    sol->foundBy = "EvoSearch";
+    return sol;
+}
+
 
 void EvolutionSearch::run(MIPData &data) {
     int seed = 0;
@@ -1510,7 +1526,7 @@ void EvolutionSearch::run(MIPData &data) {
 
 #ifdef EXTENDED_DEBUG
             if (args_device.n_violated == 0 && solution_index <= 4) {
-                double objective = args_device.objective;
+                // double objective = args_device.objective;
                 consoleInfo("\tSol{} : Found feasible!", solution_index);
                 return;
             }
@@ -1603,13 +1619,16 @@ void EvolutionSearch::run(MIPData &data) {
                 recompute_solution_metrics(data_device, args_device, gpu_model_ptrs, model_device, model_host.n_equalities, tabu_tenure, solution_index, false);
             }
             if ( is_incumbent) {
-                //TODO: add solution to pool
-                consoleLog("\tSol{} turned feasible!");
+                auto sol_ptr = make_sol_from_thrust_vector(data.mip, data_device.sol, args_device.objective, true, args_device.sum_viol);
+                sol_ptr->timeFound = gStopWatch().elapsed();
+                data.solpool.add(std::move(sol_ptr));
+                consoleLog("\tSol{} feasible and submitted to Solution Pool!", solution_index);
+
             }
             // TODO: make 100 a #define
             if (i_round > 0 && i_round % SOLUTION_TRANSFER_FREQ == 0) {
                 // ensure that the solution metrics are updated
-                assert(RECOMPUTE_SOL_METRICS_FREQ % SOLUTION_TRANSFER_FREQ == 0);
+                // assert(RECOMPUTE_SOL_METRICS_FREQ % SOLUTION_TRANSFER_FREQ == 0);
                 /* TODO: Check whether our partial solution's objective is good enough to be stored in the partial solutions pool. */
                 thrust::host_vector<double> sol_host = data_device.sol; /* Copy back solution. */
 
