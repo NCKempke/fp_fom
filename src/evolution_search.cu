@@ -163,19 +163,11 @@ __device__ void warp_sample_range(int* draws, int beg, int end, size_t seed)
     __syncwarp(); /* Ensure warp is done and synchronize its changes. */
 }
 
-int blocks_for_samples(const int n_samples_for_type) {
-    if (n_samples_for_type <= 0)
-        return 0;
-
-    return (n_samples_for_type + N_MOVES_PER_SINGLE_COL_BLOCK - 1) / N_MOVES_PER_SINGLE_COL_BLOCK;
-}
-
 /* Moves:
  * - one_opt (feas)   : push variable in direction of its objective while maintaining feasibility
  * - one_opt (greedy) : push variable in direction of its objective
  * - flip             : flips a binary randomly selected variable
  * - random           : selects a random variable and assigns it a random value
- * TODO:
  * - mtm_satisfied    : select a random satisfied constraint and set slack to zero
  * - mtm_unsatisfied  : selects a random violated constraint, then selects a variable within its range
  *                      and adjusts it to make the constraint as feasible as possible
@@ -193,12 +185,24 @@ int blocks_for_samples(const int n_samples_for_type) {
  *    -- mtm_unsatisfied only for integers and continuous within the constraint
  *
  * - Solution pool;
- * - Sync solutions from/to global solution pool;
+ * TODO:
+ * - manage solutions (decide which solutions to keep and which to discard):
+ *    -- Sync solutions from/to global solution pool;
+ *    -- export solution back to FPR
+ *    -- Mutate solutions in pool after n rounds (crossover)
+ *
  * - Scoring function:
  *    -- secondary score from Local-MIP?
- * - Mutate solutions in pool after n rounds
- * - use cuda graph to submit 100-ish rounds at once
+ *
+ * Implementation improvements
+ *    -- use cuda graph to submit 100-ish rounds at once
  */
+int blocks_for_samples(const int n_samples_for_type) {
+    if (n_samples_for_type <= 0)
+        return 0;
+
+    return (n_samples_for_type + N_MOVES_PER_SINGLE_COL_BLOCK - 1) / N_MOVES_PER_SINGLE_COL_BLOCK;
+}
 
 struct single_col_move
 {
@@ -218,6 +222,7 @@ struct move_score
     double objective_change = DBL_MAX;
     double violation_change = DBL_MAX;
     double weighted_violation_change = DBL_MAX;
+    double weighted_objective_change = DBL_MAX;
 
     /* Return this <= other w.r.t. the feasibility score. */
     __host__ __device__ inline bool is_lt_feas_score(const move_score& other) const
@@ -231,7 +236,7 @@ struct move_score
             return false;
 
         /* Tiebreaker: objective change */
-        return objective_change < other.objective_change;
+        return weighted_objective_change + weighted_violation_change < weighted_objective_change + other.weighted_violation_change;
     }
 };
 
