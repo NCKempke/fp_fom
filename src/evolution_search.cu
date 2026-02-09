@@ -1815,7 +1815,7 @@ void EvolutionSearch::run(MIPData &data) {
                 // to the best feasible objective or are infeasible but close to the being satisfied
                 if (found_feasible) {
                     if ((args_devices[solution_index].objective - best_objective) / std::abs(best_objective) > 0.2
-                        || data.mip.maxRhs * 0.2 < args_devices[solution_index].sum_viol) {
+                        || data.mip.maxRhs * model_host.ncols * 0.2 < args_devices[solution_index].sum_viol) {
                         active_solutions[solution_index] = false;
                         consoleLog("\t Sol{}: removed", solution_index);
                     }
@@ -1824,7 +1824,7 @@ void EvolutionSearch::run(MIPData &data) {
                 // Prune solutions whose constraint violation is significantly
                 // worse than the current best violation.
                 // TODO: think about the parameters
-                else if (!found_feasible && std::min(data.mip.maxRhs * 0.5, best_violation * 2) < args_devices[
+                else if (!found_feasible && std::min(data.mip.maxRhs * model_host.ncols * 0.5, best_violation * 2) < args_devices[
                              solution_index].sum_viol) {
                     active_solutions[solution_index] = false;
                     consoleLog("\t Sol{}: removed", solution_index);
