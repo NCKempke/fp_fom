@@ -242,7 +242,7 @@ struct move_score
             return false;
 
         /* Tiebreaker: objective change */
-        return weighted_objective_change + weighted_violation_change < weighted_objective_change + other.weighted_violation_change;
+        return objective_change < other.objective_change;
     }
 };
 
