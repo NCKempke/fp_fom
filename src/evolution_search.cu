@@ -1430,7 +1430,7 @@ void EvolutionSearch::try_store_partial_solution_for_fpr(MIPData &data, const Ta
     if (partials.n_sols() == 0 || partials.getSol(0).objval > args_device.objective) {
         consoleInfo("\tSol{} : Moving solution to partial pool", sol_idx);
 
-        auto sol = make_sol_from_thrust_vector(data.mip, data_device.sol, args_device.objective, args_device.sum_viol, false);
+        auto sol = make_sol_from_thrust_vector(data.mip, data_device.sol, args_device.objective, false, args_device.sum_viol );
         partials.add(std::move(sol), true);
     }
 }
