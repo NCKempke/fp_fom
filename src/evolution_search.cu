@@ -1831,7 +1831,7 @@ void EvolutionSearch::run(MIPData &data) {
                 }
             }
 #ifdef EXTENDED_DEBUG
-            exit(0);
+            // exit(0);
 #endif
         }
     }
