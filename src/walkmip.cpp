@@ -26,7 +26,7 @@ static int DEBUG_LEVEL = 2;
 #include <timer.h>
 
 WalkMIP::WalkMIP(const MIPInstance &mip_, const Params &params, PropagationEngine &_engine)
-	: mip(mip_), seed(params.seed), randomWalkProbability(params.randomWalkProbability), maxRepairSteps(params.maxRepairSteps), maxRepairNonImprove(params.maxRepairNonImprove), timeLimit(params.timeLimit), engine(_engine)
+	: mip(mip_), seed(params.seed), randomWalkProbability(params.randomWalkProbability), maxRepairSteps(params.maxRepairSteps), maxRepairNonImprove(params.maxRepairNonImprove), timeLimit(params.timeLimit), repair_objective(params.repair_objective), engine(_engine)
 {
 	// initialize random engine
 	rndgen.seed(seed);
@@ -52,6 +52,28 @@ void WalkMIP::applyShift(int var, double delta)
 	consoleDebug(3, "Apply shift of {} to {}: viol = {}", delta, mip.cNames[var], engine.violation());
 }
 
+void WalkMIP::evalFlipRow(int row, double coef, double deltaX, int pickedRow, bool& isCand, double& damage) {
+	const bool is_objective = (row == mip.nrows);
+	const double rhs = is_objective ? engine.get_obj_rhs() : mip.rhs[row];
+	const char sense = is_objective ? engine.get_obj_sense() : mip.sense[row];
+
+	double minAct = engine.getMinAct(row);
+	double maxAct = engine.getMaxAct(row);
+	double deltaAct = deltaX * coef;
+
+	double oldViol = rowViol(minAct, maxAct, sense, rhs);
+	double newViol = rowViol(minAct + deltaAct, maxAct + deltaAct, sense, rhs);
+	if (newViol > oldViol)
+		damage += (newViol - oldViol);
+
+	if ((row == pickedRow) && (newViol > oldViol))
+	{
+		consoleDebug(4, "Not improving on picked row {}: deltaAct={} oldViol = {} newViol = {}",
+						pickedRow, deltaAct, oldViol, newViol);
+		isCand = false;
+	}
+}
+
 void WalkMIP::evalFlip(int var, int pickedRow, bool &isCand, double &damage)
 {
 	const Domain &domain = engine.getDomain();
@@ -60,26 +82,41 @@ void WalkMIP::evalFlip(int var, int pickedRow, bool &isCand, double &damage)
 	isCand = true;
 	damage = 0.0;
 	double deltaX = (domain.lb(var) > 0.5) ? -1.0 : 1.0;
-	for (const auto [i, a] : mip.cols[var])
-	{
-		double minAct = engine.getMinAct(i);
-		double maxAct = engine.getMaxAct(i);
-		double deltaAct = deltaX * a;
-		double oldViol = rowViol(minAct, maxAct, mip.sense[i], mip.rhs[i]);
-		double newViol = rowViol(minAct + deltaAct, maxAct + deltaAct, mip.sense[i], mip.rhs[i]);
-		if (newViol > oldViol)
-			damage += (newViol - oldViol);
+	for (const auto [row, coef] : mip.cols[var]) {
+		evalFlipRow(row, coef, deltaX, pickedRow, isCand, damage);
 
-		if ((i == pickedRow) && (newViol > oldViol))
-		{
-			consoleDebug(4, "Not improving on picked row {}: deltaAct={} oldViol = {} newViol = {}",
-						 pickedRow, deltaAct, oldViol, newViol);
-			isCand = false;
+		if (isCand == false);
 			break;
-		}
 	}
+
+	const double obj_coef = mip.obj[var];
+	if (isCand && !iszero(obj_coef))
+		evalFlipRow(mip.nrows, obj_coef, deltaX, pickedRow, isCand, damage);
+
+
 	consoleDebug(4, "Eval flip of {} for {} [cnt={}]: iscand = {} damage = {}",
 				 deltaX, mip.cNames[var], mip.cols[var].size(), isCand, damage);
+}
+
+void WalkMIP::evalShiftRow(int row, double coef, double delta, int pickedRow, bool &isCand, double &damage) {
+	const bool is_objective = (row == mip.nrows);
+	const double rhs = is_objective ? engine.get_obj_rhs() : mip.rhs[row];
+	const char sense = is_objective ? engine.get_obj_sense() : mip.sense[row];
+
+	double minAct = engine.getMinAct(row);
+	double maxAct = engine.getMaxAct(row);
+	double deltaAct = delta * coef;
+	double oldViol = rowViol(minAct, maxAct, sense, rhs);
+	double newViol = rowViol(minAct + deltaAct, maxAct + deltaAct, sense, rhs);
+	if (newViol > oldViol)
+		damage += (newViol - oldViol);
+
+	if ((row == pickedRow) && (newViol > oldViol))
+	{
+		consoleDebug(4, "Not improving on picked {}: deltaAct = {} oldViol = {} newViol = {}",
+						pickedRow, deltaAct, oldViol, newViol);
+		isCand = false;
+	}
 }
 
 void WalkMIP::evalShift(int var, double delta, int pickedRow, bool &isCand, double &damage)
@@ -89,24 +126,17 @@ void WalkMIP::evalShift(int var, double delta, int pickedRow, bool &isCand, doub
 	/* loop over affected rows and evaluate damage */
 	isCand = true;
 	damage = 0.0;
-	for (const auto [i, a] : mip.cols[var])
-	{
-		double minAct = engine.getMinAct(i);
-		double maxAct = engine.getMaxAct(i);
-		double deltaAct = delta * a;
-		double oldViol = rowViol(minAct, maxAct, mip.sense[i], mip.rhs[i]);
-		double newViol = rowViol(minAct + deltaAct, maxAct + deltaAct, mip.sense[i], mip.rhs[i]);
-		if (newViol > oldViol)
-			damage += (newViol - oldViol);
+	for (const auto [row, coef] : mip.cols[var]) {
+		evalShiftRow(row, coef, delta, pickedRow, isCand, damage);
 
-		if ((i == pickedRow) && (newViol > oldViol))
-		{
-			consoleDebug(4, "Not improving on picked {}: deltaAct = {} oldViol = {} newViol = {}",
-						 pickedRow, deltaAct, oldViol, newViol);
-			isCand = false;
+		if (isCand == false)
 			break;
-		}
 	}
+
+	const double obj_coef = mip.obj[var];
+	if (isCand && !iszero(obj_coef))
+		evalShiftRow(mip.nrows, obj_coef, delta, pickedRow, isCand, damage);
+
 	consoleDebug(4, "Eval shift of {} for {} [cnt={}]: iscand = {} damage = {}",
 				 delta, mip.cNames[var], mip.cols[var].size(), isCand, damage);
 }
@@ -149,18 +179,27 @@ void WalkMIP::walk()
 
 		std::uniform_int_distribution<int> uniformRow(0, violated.size() - 1);
 		int violrow = violated[uniformRow(rndgen)];
-		const auto &row = mip.rows[violrow];
-		const int *indices = row.idx();
-		const double *coefs = row.coef();
-		int cnt = row.size();
 
-		bool violatedLessThanSense = (mip.sense[violrow] == 'L') ||
-									 ((mip.sense[violrow] == 'E') && (greaterThan(engine.getMinAct(violrow), mip.rhs[violrow], ABS_FEASTOL)));
+		if (violrow == mip.nrows && !repair_objective)
+			return;
+			// consoleLog("Walking objective");
 
-		consoleDebug(3, "Picked row {} violated {} act=[{},{}] rhs={}, violation={}", mip.rNames[violrow],
+		const bool is_objective = (violrow == mip.nrows);
+
+		const int *indices = is_objective ? mip.obj_cols.data() : mip.rows[violrow].idx();
+		const double *coefs = is_objective ? mip.obj_coefs.data() : mip.rows[violrow].coef();
+		const size_t cnt = is_objective ? mip.obj_cols.size() : mip.rows[violrow].size();
+
+		const double rhs = is_objective ? engine.get_obj_rhs() : mip.rhs[violrow];
+		const char sense = is_objective ? engine.get_obj_sense() : mip.sense[violrow];
+
+		bool violatedLessThanSense = (sense == 'L') ||
+									 ((sense == 'E') && (greaterThan(engine.getMinAct(violrow), rhs, ABS_FEASTOL)));
+
+		consoleDebug(3, "Picked row {} violated {} act=[{},{}] rhs={}, violation={}", is_objective ? "objective" : mip.rNames[violrow],
 					 violatedLessThanSense ? "<=" : ">=",
-					 engine.getMinAct(violrow), engine.getMaxAct(violrow), mip.rhs[violrow],
-					 rowViol(engine.getMinAct(violrow), engine.getMaxAct(violrow), mip.sense[violrow], mip.rhs[violrow]));
+					 engine.getMinAct(violrow), engine.getMaxAct(violrow), rhs,
+					 rowViol(engine.getMinAct(violrow), engine.getMaxAct(violrow), sense, rhs));
 
 		// Retrieve list of candidates with corresponding score
 		candidates.clear();
@@ -207,9 +246,9 @@ void WalkMIP::walk()
 				/* Compute the (non necessarily integer) shift that would fix this constraint */
 				double shift = 0.0;
 				if (violatedLessThanSense)
-					shift = (mip.rhs[violrow] - engine.getMinAct(violrow)) / coef;
+					shift = (rhs - engine.getMinAct(violrow)) / coef;
 				else
-					shift = (mip.rhs[violrow] - engine.getMaxAct(violrow)) / coef;
+					shift = (rhs - engine.getMaxAct(violrow)) / coef;
 
 				/* round it */
 				if (shift > 0.0)

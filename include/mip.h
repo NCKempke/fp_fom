@@ -52,11 +52,16 @@ struct MIPInstance
 	std::vector<double> lb;
 	std::vector<double> ub;
 
+	/* Sparse Objective info. */
+	std::vector<double> obj_coefs;
+	std::vector<int> obj_cols;
+
 	SparseMatrix cols;
 	// row data
 	std::vector<char> sense;
 	std::vector<double> rhs;
 	SparseMatrix rows;
+
 	// names (for debugging and output)
 	std::vector<std::string> rNames;
 	std::vector<std::string> cNames;
@@ -179,6 +184,7 @@ public:
 	/* Depth-first-search parameters. */
 	bool propagate = true;
 	bool repair = false;
+	bool repair_objective = false; /** Whether to do MIP walk on the objective constraint (+ cutoff). */
 	bool backtrackOnInfeas = true;
 	double maxConsecutiveInfeas = 0.2; /** node limit as fraction of variables */
 

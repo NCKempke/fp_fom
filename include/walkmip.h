@@ -48,6 +48,7 @@ private:
 	int maxRepairSteps;
 	int maxRepairNonImprove;
 	double timeLimit;
+	bool repair_objective;
 
 	PropagationEngine &engine;
 	// state
@@ -58,7 +59,11 @@ private:
 	std::vector<double> shifts;
 	// helpers
 	void applyFlip(int var);
+	void evalFlipRow(int row, double coef, double deltaX, int pickedRow, bool& isCand, double& damage);
 	void evalFlip(int var, int pickedRow, bool &isCand, double &damage);
+
 	void applyShift(int var, double delta);
+
+	void evalShiftRow(int row, double coef, double delta, int pickedRow, bool &isCand, double &damage);
 	void evalShift(int var, double delta, int pickedRow, bool &isCand, double &damage);
 };

@@ -100,6 +100,7 @@ public:
 	virtual ~PropagatorI() {}
 	virtual std::string name() const = 0;
 	virtual void init(const Domain &domain) {}
+	virtual void update_obj_cutoff(double obj_cutoff) {}
 	virtual void update(const Domain &domain, Domain::iterator mark) {}
 	virtual void undo(const Domain &domain, Domain::iterator mark) {}
 	virtual void propagate(PropagationEngine &engine, Domain::iterator mark, bool initialProp) = 0;
@@ -126,18 +127,34 @@ public:
 	PropagatorPtr getPropagator(const std::string &name) const;
 	/* Initialize domain and propagators */
 	void init(std::span<const double> _lb, std::span<const double> _ub, std::span<const char> _xtype);
+	void update_obj_cutoff(double obj_cutoff);
+
 	/* Get a (const) reference to current domain */
 	const Domain &getDomain() const { return domain; }
+
 	/* Domain changes */
+	double changeLowerBoundRow(int row, double coef, double delta);
 	bool changeLowerBound(int var, double newBound);
+
+	double changeUpperBoundRow(int row, double coef, double delta);
 	bool changeUpperBound(int var, double newBound);
+
 	bool fix(int var, double value);
+
+	double shift_row(int row, double coef, double delta);
 	void shift(int var, double newValue);
+
+	char get_obj_sense() const { return obj_sense; };
+	double get_obj_rhs() const { return obj_rhs; };
+
 	/* Actitivies */
 	double getMinAct(int i) const { return minAct[i]; }
 	double getMaxAct(int i) const { return maxAct[i]; }
+
 	void recomputeRowActivity(int i);
+
 	/* Violation */
+	/* Returns violated rows; Returns objective violation as nrows */
 	const IndexSet<int> &violatedRows() const { return violated; }
 	double violation() const { return totViol; }
 	/* Propagate until fixpoint or infeasibility */
@@ -146,6 +163,8 @@ public:
 	bool directImplications();
 	/* Support for backtracking */
 	Domain::iterator mark() const { return domain.mark(); }
+
+	double undo_row(const BoundChange& bdchg, int row, double coef, double delta);
 	void undo(Domain::iterator mark);
 	/* Commit current set of changes */
 	void commit();
@@ -158,6 +177,8 @@ public:
 
 protected:
 	const MIPInstance& mip;
+	double obj_rhs;
+	const char obj_sense;
 
 	Domain domain;
 	std::vector<PropagatorPtr> propagators;
@@ -167,11 +188,12 @@ protected:
 	IndexSet<int> violated;
 	double totViol = 0.0;
 	// helpers
+	double recomputeViolationRow(int row);
 	void recomputeViolation();
-	void computeActivity(int i, double &minAct, double &maxAct) const;
+	void computeActivity(int row, double &minAct, double &maxAct) const;
 
 private:
-	void debugCheckRow(int i) const;
+	void debugCheckRow(int row) const;
 };
 
 /* Debugging aids */

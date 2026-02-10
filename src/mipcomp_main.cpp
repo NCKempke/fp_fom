@@ -271,6 +271,7 @@ protected:
 		params.timeLimit = 300;
 
 		params.repair = true;
+		params.repair_objective = true; // TODO: tune this
 		params.mipPresolve = false;
 		params.postsolve = false;
 		params.writeSol = true;

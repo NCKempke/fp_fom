@@ -45,7 +45,7 @@ public:
 	MIPModelPtr lp;
 };
 
-static void fpr_worker (MIPData& mip_data, MIPModelPtr lp, const std::vector<std::pair<RankerType, ValueChooserType>>& strategies, std::atomic<size_t>& global_index, const double deadline, std::atomic<bool>& should_stop, Params params) {
+static void fpr_worker(MIPData& mip_data, MIPModelPtr lp, const std::vector<std::pair<RankerType, ValueChooserType>>& strategies, std::atomic<size_t>& global_index, const double deadline, std::atomic<bool>& should_stop, Params params) {
     /* Initialize propagation engine and lp solver. */
     WorkerFprState state(mip_data, lp);
     int ith_run = 0;
@@ -92,6 +92,10 @@ static void fpr_worker (MIPData& mip_data, MIPModelPtr lp, const std::vector<std
 
             assert(0 <= params.partial_sol && params.partial_sol < mip_data.partials.n_sols());
         }
+
+        /* Set new objective cutoff. */
+        const double obj_cutoff = mip_data.solpool.get_obj_cutoff();
+        state.engine.update_obj_cutoff(obj_cutoff);
 
         /* Update the seed in case we do the same experiment twice. */
         params.seed = seed_orig + ith_run;
