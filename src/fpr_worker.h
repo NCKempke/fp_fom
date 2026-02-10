@@ -94,8 +94,10 @@ static void fpr_worker(MIPData& mip_data, MIPModelPtr lp, const std::vector<std:
         }
 
         /* Set new objective cutoff. */
-        const double obj_cutoff = mip_data.solpool.get_obj_cutoff();
-        state.engine.update_obj_cutoff(obj_cutoff);
+        if (params.propagate_objective) {
+            const double obj_cutoff = mip_data.solpool.get_obj_cutoff();
+            state.engine.update_obj_cutoff(obj_cutoff);
+        }
 
         /* Update the seed in case we do the same experiment twice. */
         params.seed = seed_orig + ith_run;

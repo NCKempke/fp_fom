@@ -253,6 +253,7 @@ void Params::readConfig()
 	READ_ASSIGN_PARAM(displayInterval);
 
 	READ_ASSIGN_PARAM(propagate);
+	READ_ASSIGN_PARAM(propagate_objective);
 	READ_ASSIGN_PARAM(repair);
 	READ_ASSIGN_PARAM(repair_objective);
 	READ_ASSIGN_PARAM(backtrackOnInfeas);
@@ -423,6 +424,7 @@ void Params::printUsage()
 	LOG_PARAM_DEFAULT(displayInterval);
 
 	LOG_PARAM_DEFAULT(propagate);
+	LOG_PARAM_DEFAULT(propagate_objective);
 	LOG_PARAM_DEFAULT(repair);
 	LOG_PARAM_DEFAULT(repair_objective);
 	LOG_PARAM_DEFAULT(backtrackOnInfeas);
@@ -486,6 +488,7 @@ void Params::logToConsole()
 	LOG_PARAM(displayInterval);
 
 	LOG_PARAM(propagate);
+	LOG_PARAM(propagate_objective);
 	LOG_PARAM(repair);
 	LOG_PARAM(repair_objective);
 	LOG_PARAM(backtrackOnInfeas);

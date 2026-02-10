@@ -182,7 +182,6 @@ void WalkMIP::walk()
 
 		if (violrow == mip.nrows && !repair_objective)
 			return;
-			// consoleLog("Walking objective");
 
 		const bool is_objective = (violrow == mip.nrows);
 

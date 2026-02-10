@@ -270,6 +270,7 @@ protected:
 		params.threads = 8;
 		params.timeLimit = 300;
 
+		params.propagate_objective = true; // TODO: tune this
 		params.repair = true;
 		params.repair_objective = true; // TODO: tune this
 		params.mipPresolve = false;

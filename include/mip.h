@@ -183,6 +183,7 @@ public:
 
 	/* Depth-first-search parameters. */
 	bool propagate = true;
+	bool propagate_objective = true;
 	bool repair = false;
 	bool repair_objective = false; /** Whether to do MIP walk on the objective constraint (+ cutoff). */
 	bool backtrackOnInfeas = true;
