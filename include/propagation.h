@@ -100,6 +100,7 @@ public:
 	virtual ~PropagatorI() {}
 	virtual std::string name() const = 0;
 	virtual void init(const Domain &domain) {}
+	virtual void update_obj_cutoff(double obj_cutoff) {}
 	virtual void update(const Domain &domain, Domain::iterator mark) {}
 	virtual void undo(const Domain &domain, Domain::iterator mark) {}
 	virtual void propagate(PropagationEngine &engine, Domain::iterator mark, bool initialProp) = 0;
@@ -125,7 +126,9 @@ public:
 	/* Get a propagator by name */
 	PropagatorPtr getPropagator(const std::string &name) const;
 	/* Initialize domain and propagators */
-	void init(std::span<const double> _lb, std::span<const double> _ub, std::span<const char> _xtype, double obj_cutoff);
+	void init(std::span<const double> _lb, std::span<const double> _ub, std::span<const char> _xtype);
+	void update_obj_cutoff(double obj_cutoff);
+
 	/* Get a (const) reference to current domain */
 	const Domain &getDomain() const { return domain; }
 
@@ -140,6 +143,9 @@ public:
 
 	double shift_row(int row, double coef, double delta);
 	void shift(int var, double newValue);
+
+	char get_obj_sense() const { return obj_sense; };
+	double get_obj_rhs() const { return obj_rhs; };
 
 	/* Actitivies */
 	double getMinAct(int i) const { return minAct[i]; }
@@ -182,6 +188,7 @@ protected:
 	IndexSet<int> violated;
 	double totViol = 0.0;
 	// helpers
+	double recomputeViolationRow(int row);
 	void recomputeViolation();
 	void computeActivity(int row, double &minAct, double &maxAct) const;
 

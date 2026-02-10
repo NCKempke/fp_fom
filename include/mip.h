@@ -184,6 +184,7 @@ public:
 	/* Depth-first-search parameters. */
 	bool propagate = true;
 	bool repair = false;
+	bool repair_objective = false; /** Whether to do MIP walk on the objective constraint (+ cutoff). */
 	bool backtrackOnInfeas = true;
 	double maxConsecutiveInfeas = 0.2; /** node limit as fraction of variables */
 

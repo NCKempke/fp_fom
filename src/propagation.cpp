@@ -237,9 +237,20 @@ static inline bool needsRecomputation(double oldValue, double newValue)
 	return (fabs(newValue) < (fabs(oldValue) * 1e-3));
 }
 
-void PropagationEngine::init(std::span<const double> _lb, std::span<const double> _ub, std::span<const char> _xtype, double obj_cutoff)
-{
+void PropagationEngine::update_obj_cutoff(double obj_cutoff) {
 	obj_rhs = obj_cutoff - mip.objOffset;
+
+	/* Recompute the objective row violation. */
+	recomputeViolationRow(mip.nrows);
+
+	for (auto& prop : propagators)
+		prop->update_obj_cutoff(obj_cutoff);
+}
+
+void PropagationEngine::init(std::span<const double> _lb, std::span<const double> _ub, std::span<const char> _xtype)
+{
+	/* Default cutoff is infinity. */
+	obj_rhs = mip.objSense * INFTY;
 
 	/* Initialize domain */
 	FP_ASSERT(_lb.size() == _ub.size());
@@ -662,6 +673,23 @@ void PropagationEngine::disableAll()
 		prop->disable();
 }
 
+double PropagationEngine::recomputeViolationRow(int row) {
+	const bool is_objective = (row == mip.nrows);
+	const double rhs = is_objective ? obj_rhs : mip.rhs[row];
+	const char sense = is_objective ? obj_sense : mip.sense[row];
+
+	double viol = rowViol(minAct[row], maxAct[row], sense, rhs);
+	FP_ASSERT(viol >= 0.0);
+
+	if (viol > domain.feasTol)
+	{
+		// consoleLog("Violation detected at i = {}", i);
+		violated.add(row);
+	}
+
+	return viol;
+}
+
 /* Compute current violation and set of violated constraints */
 void PropagationEngine::recomputeViolation()
 {
@@ -669,21 +697,7 @@ void PropagationEngine::recomputeViolation()
 	violated.clear();
 	totViol = 0.0;
 	for (int row = 0; row < m; ++row)
-	{
-		const bool is_objective = (row == mip.nrows);
-		const double rhs = is_objective ? obj_rhs : mip.rhs[row];
-		const char sense = is_objective ? obj_sense : mip.sense[row];
-
-		double viol = rowViol(minAct[row], maxAct[row], sense, rhs);
-		FP_ASSERT(viol >= 0.0);
-
-		totViol += viol;
-		if (viol > domain.feasTol)
-		{
-			// consoleLog("Violation detected at i = {}", i);
-			violated.add(row);
-		}
-	}
+		totViol += recomputeViolationRow(row);
 	// consoleLog("Total violation = {}", totViol);
 }
 

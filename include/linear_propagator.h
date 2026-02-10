@@ -13,9 +13,10 @@
 class LinearPropagator : public PropagatorI
 {
 public:
-	LinearPropagator(const MIPInstance& mip, double obj_cutoff);
+	LinearPropagator(const MIPInstance& mip);
 	std::string name() const override { return "LinearPropagator"; }
 	void init(const Domain &domain) override;
+	void update_obj_cutoff(double obj_cutoff) override;
 	void update(const Domain &domain, Domain::iterator mark) override;
 	void undo(const Domain &domain, Domain::iterator mark) override;
 	void propagate(PropagationEngine &engine, Domain::iterator mark, bool initialProp) override;
@@ -23,7 +24,7 @@ public:
 
 private:
 	// Matrix data
-	const double obj_rhs;
+	double obj_rhs;
 	const char obj_sense;
 
 	const MIPInstance& mip;

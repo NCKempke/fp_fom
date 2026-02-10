@@ -6,8 +6,11 @@
 #include "linear_propagator.h"
 #include <consolelog.h>
 
-LinearPropagator::LinearPropagator(const MIPInstance& mip_, double obj_cutoff) : PropagatorI{}, obj_rhs{obj_cutoff - mip_.objOffset},
+LinearPropagator::LinearPropagator(const MIPInstance& mip_) : PropagatorI{},
 	obj_sense{mip_.objSense == 1.0 ? 'L' : 'G'}, mip{mip_} {
+		/* Default cutoff is infinity. */
+		obj_rhs = mip.objSense * INFTY;
+
 		/* The objective gets propagated as c'x + offset <= cutoff for minimization (objsense == 1.0), so c'x <= cutoff - offset. */
 		FP_ASSERT(mip.objSense == 1.0);
 	}
@@ -45,6 +48,10 @@ LinearPropagator::State LinearPropagator::computeState(const Domain &domain, con
 	}
 
 	return s;
+}
+
+void LinearPropagator::update_obj_cutoff(double obj_cutoff) {
+	obj_rhs = obj_cutoff - mip.objOffset;
 }
 
 void LinearPropagator::init(const Domain &domain)
@@ -347,7 +354,7 @@ void LinearPropagator::propagate(PropagationEngine &engine, Domain::iterator mar
 		propagateOneRow(engine, i);
 		if (states[i].infeas)
 		{
-			// consoleLog("Linear propagator infeasiblity on row {}", i);
+			// consoleLog("Linear propagator infeasibility on row {}", i);
 			break;
 		}
 	}
