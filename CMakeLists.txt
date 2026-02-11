@@ -45,16 +45,24 @@ endif()
 
 find_package(CUDAToolkit REQUIRED)
 
-set(COPTDIR "${CMAKE_CURRENT_SOURCE_DIR}/solvers/COPT" CACHE PATH "Path to COPT")
-set(CPLEXDIR "${CMAKE_CURRENT_SOURCE_DIR}/solvers/cplex" CACHE PATH "Path to CPLEX")
-set(GUROBIDIR "${CMAKE_CURRENT_SOURCE_DIR}/solvers/gurobi" CACHE PATH "Path to GUROBI")
-set(XPRESSDIR "${CMAKE_CURRENT_SOURCE_DIR}/solvers/xpress" CACHE PATH "Path to XPRESS")
+set(IS_ARM FALSE)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64|armv7|arm")
+    set(IS_ARM TRUE)
+endif()
 
-message(STATUS "Solver lookup directories:")
-message("   COPT directory: ${COPTDIR}")
-message("   Cplex directory: ${CPLEXDIR}")
-message("   Gurobi directory: ${GUROBIDIR}")
-message("   Xpress directory: ${XPRESSDIR}")
+if(NOT IS_ARM)
+  set(COPTDIR "${CMAKE_CURRENT_SOURCE_DIR}/solvers/COPT" CACHE PATH "Path to COPT")
+  set(CPLEXDIR "${CMAKE_CURRENT_SOURCE_DIR}/solvers/cplex" CACHE PATH "Path to CPLEX")
+  set(GUROBIDIR "${CMAKE_CURRENT_SOURCE_DIR}/solvers/gurobi" CACHE PATH "Path to GUROBI")
+  set(XPRESSDIR "${CMAKE_CURRENT_SOURCE_DIR}/solvers/xpress" CACHE PATH "Path to XPRESS")
+
+  message(STATUS "Solver lookup directories:")
+  message("   COPT directory: ${COPTDIR}")
+  message("   Cplex directory: ${CPLEXDIR}")
+  message("   Gurobi directory: ${GUROBIDIR}")
+  message("   Xpress directory: ${XPRESSDIR}")
+endif(NOT IS_ARM)
+
 
 # Create a library with all common source files
 add_library(fp_lib STATIC
@@ -97,7 +105,12 @@ add_executable(mipcomp_main
 )
 
 # TODO: which exactly?
-set_target_properties(mipcomp_main PROPERTIES CUDA_ARCHITECTURES "75")#;86;90")
+if (IS_ARM)
+  set_target_properties(mipcomp_main PROPERTIES CUDA_ARCHITECTURES "90;90a")#;86;90")
+else ()
+  set_target_properties(mipcomp_main PROPERTIES CUDA_ARCHITECTURES "75")#;86;90")
+endif (IS_ARM)
+
 set_target_properties(mipcomp_main PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 
 target_compile_options(mipcomp_main PRIVATE

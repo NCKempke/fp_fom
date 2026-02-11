@@ -7,7 +7,7 @@ if(NOT DEFINED GUROBIDIR)
 		set(GUROBIDIR $ENV{GUROBI_HOME})
 		message(STATUS "Setting GUROBIDIR from GUROBI_HOME environment variable: ${GUROBIDIR}")
 	else()
-		message(ERROR "GUROBIDIR is not set and GUROBI_HOME environment variable is not defined")
+		message(STATUS "GUROBIDIR is not set and GUROBI_HOME environment variable is not defined")
 	endif()
 else()
 	message(STATUS "Using explicitly set GUROBIDIR: ${GUROBIDIR}")
@@ -15,17 +15,25 @@ endif()
 
 # Optionally, you can check if the directory exists
 if(NOT EXISTS ${GUROBIDIR})
-	message(ERROR "GUROBI directory does not exist: ${GUROBIDIR}")
+	message(STATUS "GUROBI directory does not exist: ${GUROBIDIR}")
+endif()
+
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64|armv7|armv8|arm")
+    set(GUROBI_ARCH "armlinux64")
+    set(GUROBI_ARCH_CUDA "armlinux64cuda12")
+    message(STATUS "ARM architecture detected - searching in armlinux64 paths")
+else()
+    set(GUROBI_ARCH "linux64")
+    set(GUROBI_ARCH_CUDA "linux64cuda12")
+    message(STATUS "x86_64 architecture detected - searching in linux64 paths")
 endif()
 
 # Look for Gurobi 13!
 # Find GUROBI headers and library
 find_path(GUROBI_INCLUDE_DIR "gurobi_c++.h"
 	PATHS
-		${GUROBIDIR}/linux64cuda12/include/
-		${GUROBIDIR}/armlinux64cuda12/include/
-		${GUROBIDIR}/linux64/include/
-		${GUROBIDIR}/armlinux64/include/
+		${GUROBIDIR}/${GUROBI_ARCH_CUDA}/include/
+		${GUROBIDIR}/${GUROBI_ARCH}/include/
 	NO_DEFAULT_PATH
 )
 
@@ -37,10 +45,8 @@ find_library(GUROBI_CPP_LIBRARY
 		"gurobi_c++"     # Fallback to old name
 		"libgurobi_c++.a"
 	PATHS
-		${GUROBIDIR}/linux64cuda12/lib/
-		${GUROBIDIR}/armlinux64cuda12/lib/
-		${GUROBIDIR}/linux64/lib/
-		${GUROBIDIR}/armlinux64/lib/
+		${GUROBIDIR}/${GUROBI_ARCH_CUDA}/lib/
+		${GUROBIDIR}/${GUROBI_ARCH}/lib/
 	NO_DEFAULT_PATH
 )
 
@@ -52,13 +58,10 @@ find_library(GUROBI_SHARED_LIBRARY
 		"gurobi"         # Fallback
 		"libgurobi.so"
 	PATHS
-		${GUROBIDIR}/linux64cuda12/lib/
-		${GUROBIDIR}/armlinux64cuda12/lib/
-		${GUROBIDIR}/linux64/lib/
-		${GUROBIDIR}/armlinux64/lib/
+		${GUROBIDIR}/${GUROBI_ARCH_CUDA}/lib/
+		${GUROBIDIR}/${GUROBI_ARCH}/lib/
 	NO_DEFAULT_PATH
 )
-
 
 mark_as_advanced(GUROBI_INCLUDE_DIR GUROBI_CPP_LIBRARY GUROBI_SHARED_LIBRARY)
 
