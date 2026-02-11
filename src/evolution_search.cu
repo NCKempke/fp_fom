@@ -54,6 +54,10 @@ constexpr int BLOCKSIZE_VECTOR_KERNEL = 1024; /* Blocksize used for vector kerne
 
 constexpr int AVAILABLE_MOVES = 6;
 
+/* CUDA graph setup. */
+constexpr bool GRAPH_ENABLE = true; /* Turn off for debugging and extra output. */
+constexpr int GRAPH_N_ITER = 100; /* Amount of iterations done per graph submission. */
+
 /* For multi-armed bandit maybe. */
 using moves_probability = std::array<double, AVAILABLE_MOVES>;
 
@@ -307,6 +311,10 @@ struct TabuSearchDataDevice
 
     thrust::device_vector<int> violated_constraints;
 
+    /* Each solution keeps 6 cuda streams. Stream 0 is used for the dependent work, stream 1..5 are used to submit
+     * our 6 move evaluation kernels in parallel. Should we add new kernels, then we will need to add new stream. */
+    std::array<cudaStream_t, AVAILABLE_MOVES> streams;
+
     // Constructor
     TabuSearchDataDevice(const int nrows_, const int ncols_, const int tabu_tenure)
         : sol(ncols_, 0.0),
@@ -314,7 +322,15 @@ struct TabuSearchDataDevice
           tabu(ncols_, -tabu_tenure),
           constraint_weights(nrows_, 1),
           objective_weight(1, 1),
-          violated_constraints(nrows_) {};
+          violated_constraints(nrows_) {
+    for (size_t i = 0; i < AVAILABLE_MOVES; ++i)
+        cudaStreamCreate(&streams[i]);
+    };
+
+    ~TabuSearchDataDevice() {
+        for (size_t i = 0; i < AVAILABLE_MOVES; ++i)
+            cudaStreamDestroy(streams[i]);
+    };
 };
 
 struct TabuSearchKernelArgs
