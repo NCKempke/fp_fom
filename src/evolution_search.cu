@@ -1711,13 +1711,15 @@ void EvolutionSearch::run(MIPData &data) {
             if (is_incumbent || (i_round > 0 && i_round % RECOMPUTE_SOL_METRICS_FREQ == 0)) {
                 recompute_solution_metrics(data_device, args_device, gpu_model_ptrs, model_device, model_host.n_equalities, tabu_tenure, solution_index, false);
             }
+            if (solution_turned_feasible)
+                args_device.is_found_feasible = true;
             if ( is_incumbent) {
                 auto sol_ptr = make_sol_from_thrust_vector(data.mip, data_device.sol, args_device.objective, true, args_device.sum_viol);
                 sol_ptr->timeFound = gStopWatch().elapsed();
                 data.solpool.add(std::move(sol_ptr));
                 consoleLog("\tSol{} feasible and submitted to Solution Pool!", solution_index);
-
             }
+
 
             //TODO: this should probably moved out of the solution-index loop
             if (i_round > 0 && i_round % SOLUTION_TRANSFER_FREQ == 0) {
