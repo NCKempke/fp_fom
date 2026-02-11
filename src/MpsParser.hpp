@@ -241,6 +241,20 @@ public:
         mip.rows = mip.cols.transpose();
 
         mip.map_orig_to_new_col = std::move(old_to_new_col);
+
+        /* Extract sparse objective; this could have been done with the read-in sparse objective as well but .. */
+    	mip.obj_coefs.reserve(mip.ncols);
+    	mip.obj_cols.reserve(mip.ncols);
+
+    	for (int jcol = 0; jcol < mip.ncols; ++jcol) {
+    		const double coef = mip.obj[jcol];
+
+    		if (!iszero(coef)) {
+    			mip.obj_coefs.push_back(coef);
+    			mip.obj_cols.push_back(jcol);
+    		}
+    	}
+
 // #define PRINT_PROBLEM
 
 #ifdef PRINT_PROBLEM

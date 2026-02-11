@@ -428,7 +428,6 @@ protected:
 		data.lp = premodel;
 		data.lp->switchToLP();
 
-		/* Initialized propagators and do one round of propagation. */
 		const MIPInstance &mip = data.mip;
 		PropagationEngine engine{mip};
 		engine.add(PropagatorPtr{new CliquesPropagator{data.cliquetable}});

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -22,6 +23,7 @@ protected:
     std::vector<size_t> solution_rank;
     std::vector<std::unique_ptr<Solution>> pool;
 
+    std::atomic<double> obj_cutoff;
     double objsense;
     int ncols;
     bool thread_safe;
@@ -30,6 +32,8 @@ protected:
 public:
     SolutionPool() = delete;
     SolutionPool(int ncols_, double objsense_ /** 1.0 == MIN; -1.0 == MAX */, bool thread_safe);
+
+    double get_obj_cutoff() const { return obj_cutoff.load(std::memory_order_relaxed); };
 
     /* Add solution to pool; if force == true, always add the solution. */
     void add(std::unique_ptr<Solution> sol, bool force = false);

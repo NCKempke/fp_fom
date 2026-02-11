@@ -50,6 +50,20 @@ MIPInstance extract(MIPModelPtr model)
 
 	for (const auto &rhs : mip.rhs)
 		mip.maxRhs = std::max(std::abs(rhs), mip.maxRhs);
+
+	/* Extract sparse objective */
+	mip.obj_coefs.reserve(mip.ncols);
+	mip.obj_cols.reserve(mip.ncols);
+
+	for (int jcol = 0; jcol < mip.ncols; ++jcol) {
+		const double coef = mip.obj[jcol];
+
+		if (!iszero(coef)) {
+			mip.obj_coefs.push_back(coef);
+			mip.obj_cols.push_back(jcol);
+		}
+	}
+
 	return mip;
 }
 
@@ -239,7 +253,9 @@ void Params::readConfig()
 	READ_ASSIGN_PARAM(displayInterval);
 
 	READ_ASSIGN_PARAM(propagate);
+	READ_ASSIGN_PARAM(propagate_objective);
 	READ_ASSIGN_PARAM(repair);
+	READ_ASSIGN_PARAM(repair_objective);
 	READ_ASSIGN_PARAM(backtrackOnInfeas);
 	READ_ASSIGN_PARAM(maxConsecutiveInfeas);
 
@@ -408,7 +424,9 @@ void Params::printUsage()
 	LOG_PARAM_DEFAULT(displayInterval);
 
 	LOG_PARAM_DEFAULT(propagate);
+	LOG_PARAM_DEFAULT(propagate_objective);
 	LOG_PARAM_DEFAULT(repair);
+	LOG_PARAM_DEFAULT(repair_objective);
 	LOG_PARAM_DEFAULT(backtrackOnInfeas);
 	LOG_PARAM_DEFAULT(maxConsecutiveInfeas);
 
@@ -470,7 +488,9 @@ void Params::logToConsole()
 	LOG_PARAM(displayInterval);
 
 	LOG_PARAM(propagate);
+	LOG_PARAM(propagate_objective);
 	LOG_PARAM(repair);
+	LOG_PARAM(repair_objective);
 	LOG_PARAM(backtrackOnInfeas);
 	LOG_PARAM(maxConsecutiveInfeas);
 

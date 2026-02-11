@@ -16,6 +16,7 @@ public:
 	LinearPropagator(const MIPInstance& mip);
 	std::string name() const override { return "LinearPropagator"; }
 	void init(const Domain &domain) override;
+	void update_obj_cutoff(double obj_cutoff) override;
 	void update(const Domain &domain, Domain::iterator mark) override;
 	void undo(const Domain &domain, Domain::iterator mark) override;
 	void propagate(PropagationEngine &engine, Domain::iterator mark, bool initialProp) override;
@@ -23,6 +24,9 @@ public:
 
 private:
 	// Matrix data
+	double obj_rhs;
+	const char obj_sense;
+
 	const MIPInstance& mip;
 	// State (note: activities are maintained by the engine itself!)
 	Domain::iterator lastUpdated;
@@ -33,8 +37,10 @@ private:
 	};
 	std::vector<State> states;
 	std::vector<int> firstNonBin;
+
 	// Helpers
-	State computeState(const Domain &domain, SparseMatrix::view_type row) const;
+	State computeState(const Domain &domain, const int row) const;
+	void undoBoundChangeForEntry(const Domain &domain, const BoundChange &bdchg, int var, double coef);
 	void undoBoundChange(const Domain &domain, const BoundChange &bdchg);
 	void propagateOneRowLessThan(PropagationEngine &engine, int i, double mult, double bound);
 	void propagateOneRow(PropagationEngine &engine, int i);
