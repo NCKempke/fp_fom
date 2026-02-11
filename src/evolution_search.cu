@@ -416,9 +416,9 @@ __device__ move_score compute_score_single_col_move_warp(const GpuModelPtrs &mod
     }
 
     const double slack_change = warp_sum_reduce(viol_change_thread);
-    const double weighted_viol_change = warp_sum_reduce(weighted_viol_change_thread);
-    if (args.is_found_feasible && slack_change == 0)
-        weighted_viol_change_thread += args.objective_weight[0] * delta_obj;
+    double weighted_viol_change = warp_sum_reduce(weighted_viol_change_thread);
+    if (args.is_found_feasible && args.n_violated == 0)
+        weighted_viol_change += args.objective_weight[0] * delta_obj;
 
     return {delta_obj, slack_change, weighted_viol_change};
 }
@@ -1661,7 +1661,6 @@ void EvolutionSearch::run(MIPData &data) {
                     update_weights_kernel<true><<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(args_device);
                 else
                     update_weights_kernel<false><<<n_blocks, BLOCKSIZE_VECTOR_KERNEL>>>(args_device);
-
                 continue;
             }
 
@@ -1829,6 +1828,7 @@ void EvolutionSearch::run(MIPData &data) {
                 else if (!found_feasible && std::min(data.mip.maxRhs * model_host.ncols * 0.5, best_violation * 2) < args_devices[
                              solution_index].sum_viol) {
                     active_solutions[solution_index] = false;
+
                     consoleLog("\t Sol{}: removed", solution_index);
                 }
             }
