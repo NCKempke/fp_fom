@@ -134,7 +134,9 @@ static std::unique_ptr<std::atomic<bool>> submit_solution_writer(MIPData& mip_da
 }
 
 /* Submit n fix-and-propagate workers continuously attempting to run some fix and propagate. Return's a vector of n_workers stop flags that can be used to cancel a worker. */
-static std::vector<std::unique_ptr<std::atomic<bool>>> submit_fpr_workers(MIPData& mip_data, ThreadPool& thread_pool, const std::vector<std::pair<RankerType, ValueChooserType>>& strategies, std::atomic<size_t>& global_counter, const double deadline, int n_workers, const Params& params)
+static std::vector<std::unique_ptr<std::atomic<bool> > > submit_fpr_workers(
+	MIPData &mip_data, ThreadPool &thread_pool, const std::vector<std::pair<RankerType, ValueChooserType> > &strategies,
+	std::atomic<size_t> &global_counter, const double deadline, int n_workers, const std::pair<RankerType, ValueChooserType>& fallback_strat, const Params &params)
 {
 	std::vector<std::unique_ptr<std::atomic<bool>>> flags;
 
@@ -151,7 +153,7 @@ static std::vector<std::unique_ptr<std::atomic<bool>>> submit_fpr_workers(MIPDat
 		MIPModelPtr lp = mip_data.lp->clone();
 
 		thread_pool.enqueue([&, lp, deadline]{
-			fpr_worker(mip_data, lp, strategies, global_counter, deadline, flag_ref, params);
+			fpr_worker(mip_data, lp, strategies, global_counter, deadline, flag_ref, fallback_strat, params);
 		});
 	}
 
@@ -359,7 +361,10 @@ protected:
 			{RankerType::ROW_VIOLATION, ValueChooserType::RANDOM_GUIDED},
 		};
 
-		std::vector<std::unique_ptr<std::atomic<bool>>> worker_flags = submit_fpr_workers(*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, finish_time, 5, params);
+		static constexpr std::pair fallback_strategy = {RankerType::TYPE, ValueChooserType::RANDOM};
+
+		std::vector<std::unique_ptr<std::atomic<bool>>> worker_flags = submit_fpr_workers(
+			*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, finish_time, 5, fallback_strategy, params);
 
 		/* We run in parallel: The root LP using PDLP, 6 CPU fix-and-propagate threads, 1 thread running the GPU evolution search.
 		 *

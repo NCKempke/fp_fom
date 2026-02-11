@@ -45,8 +45,13 @@ public:
 	MIPModelPtr lp;
 };
 
-static void fpr_worker(MIPData& mip_data, MIPModelPtr lp, const std::vector<std::pair<RankerType, ValueChooserType>>& strategies, std::atomic<size_t>& global_index, const double deadline, std::atomic<bool>& should_stop, Params params) {
+static void fpr_worker(MIPData &mip_data, MIPModelPtr lp,
+                       const std::vector<std::pair<RankerType, ValueChooserType> > &strategies,
+                       std::atomic<size_t> &global_index, const double deadline, const std::atomic<bool> &should_stop,
+                       const std::pair<RankerType, ValueChooserType>& fallback_strat,
+                       Params params) {
     /* Initialize propagation engine and lp solver. */
+    //TODO: AH @ NK the lp is always copied by value. Is it not sufficient to copy it once?
     WorkerFprState state(mip_data, lp);
     int ith_run = 0;
     bool lp_is_ready = false;
@@ -66,31 +71,43 @@ static void fpr_worker(MIPData& mip_data, MIPModelPtr lp, const std::vector<std:
             break;
         }
 
-        /* Get a globally unique index to figure the next strategy to run on this thread. */
-        size_t idx = global_index.fetch_add(1, std::memory_order_relaxed);
-        const auto strat = strategies[idx % strategies.size()];
-
         /* Check whether the LP is ready yet. */
         if (!lp_is_ready) {
             lp_is_ready = mip_data.lp_solution_ready.load(std::memory_order_acquire);
         }
 
-        /* Skip LP based solutions until the LP solution is available. */
-        if ((rankerNeedsLpSolve(strat.first) || valueChooserNeedsLpSolve(strat.second)) && !lp_is_ready) {
-            continue;
+        /* Get a globally unique index to figure the next strategy to run on this thread. */
+        const size_t idx = global_index.fetch_add(1, std::memory_order_relaxed);
+        const auto [ranker, chooser] = strategies[idx % strategies.size()];
+
+        const int n_partials = mip_data.partials.n_sols();
+
+        const bool needs_lp = rankerNeedsLpSolve(ranker) || valueChooserNeedsLpSolve(chooser);
+        const bool needs_partial_sol = rankerNeedsPartial(ranker) || valueChooserNeedsPartial(chooser);
+
+        /*
+         * Validate that the requested (ranker, valueChooser) strategy can be executed.
+         * Fallback is selected if:
+         *   - LP-based components are required but LP data is not available, or
+         *   - Partial-solution-based components are required but no partial solutions exist.
+         */
+        if ((needs_lp && !lp_is_ready) || (needs_partial_sol && mip_data.partials.n_sols() == 0)) {
+            params.ranker = fallback_strat.first;
+            params.valueChooser = fallback_strat.second;
         }
+        else {
+            // All required data available → use requested strategy.
+            params.ranker = ranker;
+            params.valueChooser = chooser;
+            assert(!needs_partial_sol || mip_data.partials.n_sols() > 0);
 
-        /* If ranker or value chooser need a partial solution, check whether one exists and pick one, else, continue. */
-        if (rankerNeedsPartial(strat.first) || valueChooserNeedsPartial(strat.second)) {
+            if (needs_partial_sol) {
+                assert(mip_data.partials.n_sols() > 0);
 
-            const int n_partials = mip_data.partials.n_sols();
-            if (n_partials == 0)
-                continue;
-
-            /* For now, we pick idx % n_sols. */
-            params.partial_sol = idx % n_partials;
-
-            assert(0 <= params.partial_sol && params.partial_sol < mip_data.partials.n_sols());
+                /* For now, we pick idx % n_sols. */
+                params.partial_sol = static_cast<int>(idx) % n_partials;
+                assert(0 <= params.partial_sol && params.partial_sol < mip_data.partials.n_sols());
+            }
         }
 
         /* Set new objective cutoff. */
@@ -100,9 +117,7 @@ static void fpr_worker(MIPData& mip_data, MIPModelPtr lp, const std::vector<std:
         }
 
         /* Update the seed in case we do the same experiment twice. */
-        params.seed = seed_orig + ith_run;
-        params.ranker = strat.first;
-        params.valueChooser = strat.second;
+        params.seed = seed_orig + ith_run + idx;
 
         runDFS(mip_data, state.engine, mip_data.solpool, state.lp, params);
         ++ith_run;
