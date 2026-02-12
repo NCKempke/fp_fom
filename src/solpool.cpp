@@ -5,6 +5,7 @@
 #include "tolerances.h"
 #include "tool_assert.h"
 #include "move_type.h"
+#include "timer.h"
 
 SolutionPool::SolutionPool(int ncols_, double objsense_, bool thread_safe_) : ncols(ncols_), objsense(objsense_), thread_safe(thread_safe_)
 {
@@ -169,7 +170,7 @@ void SolutionPool::add(std::unique_ptr<Solution> sol, const RankerType ranker, c
     bool incumbent = false;
     if ((has_feas && sol->objval < best_obj) || (!has_feas && sol->isFeas)) {
         incumbent = true;
-        consoleLog("FPR {} {} found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}", toString(ranker), toString(chooser),
+        consoleLog("{:.2f} FPR {} {} found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}", gStopWatch().lap(), toString(ranker), toString(chooser),
                sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, sol->timeFound, sol->foundBy);
     }
     const auto key = std::make_pair(ranker, chooser);
@@ -199,7 +200,7 @@ void SolutionPool::add(std::unique_ptr<Solution> sol, const move_type move, cons
     bool incumbent = false;
     if ((has_feas && sol->objval < best_obj) || (!has_feas && sol->isFeas)) {
         incumbent = true;
-        consoleLog("EVOSEARCH {} found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}", toString(move),
+        consoleLog("{:.2f} EVOSEARCH {} found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}", gStopWatch().lap(), toString(move),
                sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, sol->timeFound, sol->foundBy);
     }
     auto &[bestObj, numFeasible, numIncumbent] = evo_stats[move];
@@ -262,7 +263,7 @@ void SolutionPool::print() const
     {
         const int ith_sol = solution_rank[k];
         const auto& sol = *pool[ith_sol];
-        consoleLog("{:>8}{:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>12.2f}{:>8.2f}  {}",
+        consoleLog("{:.2f}{:>8}{:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>12.2f}{:>8.2f}  {}", gStopWatch().lap(),
                    k, sol.objval, sol.relViolation, sol.absViolation, sol.isFeas, solDistance(best.x, sol.x), sol.timeFound, sol.foundBy);
     }
 }
