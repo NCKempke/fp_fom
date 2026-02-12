@@ -1,10 +1,10 @@
 #include "solpool.h"
+#include <consolelog.h>
 
 #include "solution.h"
 #include "tolerances.h"
 #include "tool_assert.h"
-
-#include <consolelog.h>
+#include "move_type.h"
 
 SolutionPool::SolutionPool(int ncols_, double objsense_, bool thread_safe_) : ncols(ncols_), objsense(objsense_), thread_safe(thread_safe_)
 {
@@ -162,9 +162,6 @@ void SolutionPool::add(std::unique_ptr<Solution> sol, const RankerType ranker, c
         return;
 
     LockGuard lock(*this);
-    consoleLog("found");
-
-
 
     const bool has_feas = has_feas_unsafe();
     const double best_obj = has_feas ? pool[solution_rank[0]]->objval : objsense * INFTY;
@@ -176,7 +173,7 @@ void SolutionPool::add(std::unique_ptr<Solution> sol, const RankerType ranker, c
                sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, sol->timeFound, sol->foundBy);
     }
     const auto key = std::make_pair(ranker, chooser);
-    auto &[bestObj, numFeasible, numIncumbent] = strategyStats[key];
+    auto &[bestObj, numFeasible, numIncumbent] = dfs_stats[key];
     if (sol->isFeas) {
         numFeasible++;
         if (sol->objval < bestObj) {
@@ -185,10 +182,38 @@ void SolutionPool::add(std::unique_ptr<Solution> sol, const RankerType ranker, c
         if (incumbent)
             numIncumbent++;
     }
-    consoleLog("end");
 
     add_unsafe(std::move(sol), force);
 }
+
+void SolutionPool::add(std::unique_ptr<Solution> sol, const move_type move, const bool force)
+{
+    if (!sol)
+        return;
+
+    LockGuard lock(*this);
+
+    const bool has_feas = has_feas_unsafe();
+    const double best_obj = has_feas ? pool[solution_rank[0]]->objval : objsense * INFTY;
+
+    bool incumbent = false;
+    if ((has_feas && sol->objval < best_obj) || (!has_feas && sol->isFeas)) {
+        incumbent = true;
+        consoleLog("EVOSEARCH {} found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}", toString(move),
+               sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, sol->timeFound, sol->foundBy);
+    }
+    auto &[bestObj, numFeasible, numIncumbent] = evo_stats[move];
+    if (sol->isFeas) {
+        numFeasible++;
+        if (sol->objval < bestObj) {
+            bestObj = sol->objval;
+        }
+        if (incumbent)
+            numIncumbent++;
+    }
+    add_unsafe(std::move(sol), force);
+}
+
 
 void SolutionPool::add(std::unique_ptr<Solution> sol, bool force)
 {
@@ -249,12 +274,42 @@ void SolutionPool::mark_solution_rank_parsed(const int i) const {
 }
 
 void SolutionPool::print_stats() const {
-    consoleLog("FPR Stats");
-    consoleLog("Ranker Chooser\t NumInc NumFeasible");
-    for (auto& entry : strategyStats) {
-        const RankerType &ranker = entry.first.first;      // <-- first element of the inner pair
-        const ValueChooserType &chooser = entry.first.second; // <-- second element of the inner pair
-        const StrategyStats &stats = entry.second;
-        consoleLog("{<9} {<9}\t {} {}", toString(ranker), toString(chooser), stats.numIncumbent, stats.numFeasible);
+    if (!dfs_stats.empty()) {
+        consoleLog("FPR Stats");
+        consoleLog("{:<12} {:<12} {:>12} {:>12}",
+                   "Ranker", "Chooser", "NumInc", "NumFeasible");
+
+        for (const auto& entry : dfs_stats) {
+            const RankerType& ranker = entry.first.first;
+            const ValueChooserType& chooser = entry.first.second;
+            const StrategyStats& stats = entry.second;
+
+            consoleLog("{:<12} {:<12} {:>12} {:>12}",
+                       toString(ranker),
+                       toString(chooser),
+                       stats.numIncumbent,
+                       stats.numFeasible);
+        }
+    }
+    else {
+        consoleLog("FPR did not found a solution");
+    }
+    if (evo_stats.empty()) {
+        consoleLog("EVO SEARCH did not found a solution");
+        return;
+    }
+    consoleLog("");
+    consoleLog("EVO Stats");
+    consoleLog("{:<12} {:>12} {:>12}",
+               "Move", "NumInc", "NumFeasible");
+
+    for (const auto& entry : evo_stats) {
+        const move_type& move = entry.first;
+        const StrategyStats& stats = entry.second;
+
+        consoleLog("{:<12} {:>12} {:>12}",
+                   toString(move),
+                   stats.numIncumbent,
+                   stats.numFeasible);
     }
 }

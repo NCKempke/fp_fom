@@ -3,7 +3,6 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
-#include <span>
 #include <vector>
 #include <c++/12/map>
 
@@ -19,6 +18,8 @@
  *  - feasible first, good to bad obj
  *  - infeasible second, low to high violation
  */
+
+enum class move_type;
 
 struct StrategyStats {
     double bestObj = INFTY;
@@ -39,7 +40,8 @@ protected:
     int ncols;
     bool thread_safe;
     mutable std::mutex mtx;
-    std::map<std::pair<RankerType, ValueChooserType>, StrategyStats> strategyStats;
+    std::map<std::pair<RankerType, ValueChooserType>, StrategyStats> dfs_stats;
+    std::map<move_type, StrategyStats> evo_stats;
 
 
 public:
@@ -54,6 +56,8 @@ public:
     void add(std::unique_ptr<Solution> sol, bool force = false);
 
     void add(std::unique_ptr<Solution> sol, RankerType ranker, ValueChooserType chooser, bool force = false);
+
+    void add(std::unique_ptr<Solution> sol, move_type move, bool force = false);
 
     /* Return a const reference to the solution at index n. The index must be valid! */
     const Solution& getSol(int idx) const;

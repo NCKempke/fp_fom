@@ -2,6 +2,7 @@
 
 #include "gpu_data.cuh"
 #include "mip.h"
+#include "move_type.h"
 #include "utils.cuh"
 
 #include <consolelog.h>
@@ -56,34 +57,6 @@ constexpr int AVAILABLE_MOVES = 6;
 
 /* For multi-armed bandit maybe. */
 using moves_probability = std::array<double, AVAILABLE_MOVES>;
-
-enum class move_type {
-    random = 0,
-    oneopt,
-    oneopt_greedy,
-    flip,
-    mtm_unsat,
-    mtm_sat
-};
-
-const char* to_string(move_type m) {
-    switch (m) {
-        case move_type::random:
-            return "random";
-        case move_type::oneopt:
-            return "oneopt";
-        case move_type::oneopt_greedy:
-            return "oneopt_greedy";
-        case move_type::flip:
-            return "flip";
-        case move_type::mtm_unsat:
-            return "mtm_unsat";
-        case move_type::mtm_sat:
-            return "mtm_sat";
-        default:
-            return "unknown";
-    }
-}
 
 struct warp_sampling_range {
     int beg;
@@ -1673,24 +1646,24 @@ void EvolutionSearch::run(MIPData &data) {
             int offset_mtm_unsat = offset_flip + blocks_per_move[3];
             int offset_mtm_sat = offset_mtm_unsat + blocks_per_move[4];
 #ifdef EXTENDED_DEBUG
-            std::string move_name;
+            move_type selected_move;
             if (min_index >= offset_mtm_sat)
-                move_name = "mtm_sat";
+                selected_move = move_type::mtm_sat;
             else if (min_index >= offset_mtm_unsat)
-                move_name = "mtm_unsat";
+                selected_move = move_type::mtm_unsat;
             else if (min_index >= offset_flip)
-                move_name = "flip";
+                selected_move = move_type::flip;
             else if (min_index >= offset_oneopt_greedy)
-                move_name = "oneopt_greedy";
+                selected_move = move_type::oneopt_greedy;
             else if (min_index >= offset_oneopt)
-                move_name = "oneopt";
+                selected_move = move_type::oneopt;
             else if (min_index >= offset_random)
-                move_name = "random";
+                selected_move = move_type::random;
             else
-                move_name = "unknown";
+                assert(false);
 
             consoleLog("\tSol{} : Taking {} move (obj_change, slack_change, score)): ({}, {}, {})", solution_index,
-                       move_name, score.objective_change, score.violation_change, score.weighted_violation_change);
+                       toString(selected_move), score.objective_change, score.violation_change, score.weighted_violation_change);
 #endif
             /* Apply best move. */
             apply_move<<<1, 1024>>>(gpu_model_ptrs, args_device,
@@ -1713,7 +1686,7 @@ void EvolutionSearch::run(MIPData &data) {
             if ( is_incumbent) {
                 auto sol_ptr = make_sol_from_thrust_vector(data.mip, data_device.sol, args_device.objective, true, args_device.sum_viol);
                 sol_ptr->timeFound = gStopWatch().elapsed();
-                data.solpool.add(std::move(sol_ptr));
+                data.solpool.add(std::move(sol_ptr), selected_move);
                 consoleLog("\tSol{} feasible and submitted to Solution Pool!", solution_index);
 
             }
