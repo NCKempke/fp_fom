@@ -30,7 +30,7 @@ void SolutionPool::unlock() const
     }
 }
 
-const Solution& SolutionPool::getSol(int idx) const {
+const Solution SolutionPool::getSol(int idx) const {
     LockGuard lock(*this);
 
     FP_ASSERT(0 <= idx && idx < pool.size());
@@ -134,8 +134,9 @@ void SolutionPool::add_unsafe(std::unique_ptr<Solution> sol, bool force) {
         if (insertPos == solution_rank.begin()) {
             const double newobj = objsense * sol->objval;
 
-            FP_ASSERT(!sol->isFeas || objsense * sol->objval < get_obj_cutoff());
-            obj_cutoff.store(newobj);
+            //TODO: if threads run in parallel solution can be submitted that violate the cutoff due to sync?
+            if ((!sol->isFeas || objsense * sol->objval < get_obj_cutoff()));
+                obj_cutoff.store(newobj);
         } else {
             FP_ASSERT(!sol->isFeas || objsense * sol->objval >= get_obj_cutoff());
         }

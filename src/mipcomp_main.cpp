@@ -353,18 +353,18 @@ protected:
 		// TODO: we need LP free methods here as well to run until the LP is solved.
 		const static std::vector<std::pair<RankerType, ValueChooserType>> fpr_queue_cpu = {
 			{RankerType::FRAC, ValueChooserType::RANDOM_LP},
-			{RankerType::DUALS, ValueChooserType::RANDOM_LP},
-			{RankerType::RANDOM, ValueChooserType::RANDOM_LP},
-			{RankerType::REDCOSTS, ValueChooserType::RANDOM_LP},
-			{RankerType::TYPE, ValueChooserType::RANDOM_LP},
-			{RankerType::TYPE, ValueChooserType::RANDOM_GUIDED},
-			{RankerType::ROW_VIOLATION, ValueChooserType::RANDOM_GUIDED},
+			// {RankerType::DUALS, ValueChooserType::RANDOM_LP},
+			// {RankerType::RANDOM, ValueChooserType::RANDOM_LP},
+			// {RankerType::REDCOSTS, ValueChooserType::RANDOM_LP},
+			// {RankerType::TYPE, ValueChooserType::RANDOM_LP},
+			// {RankerType::TYPE, ValueChooserType::RANDOM_GUIDED},
+			// {RankerType::ROW_VIOLATION, ValueChooserType::RANDOM_GUIDED},
 		};
 
 		static constexpr std::pair fallback_strategy = {RankerType::TYPE, ValueChooserType::RANDOM};
 
 		std::vector<std::unique_ptr<std::atomic<bool>>> worker_flags = submit_fpr_workers(
-			*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, finish_time, 5, fallback_strategy, params);
+			*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, finish_time, 1, fallback_strategy, params);
 
 		/* We run in parallel: The root LP using PDLP, 6 CPU fix-and-propagate threads, 1 thread running the GPU evolution search.
 		 *

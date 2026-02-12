@@ -76,7 +76,7 @@ public:
 	/* Commit to current set of bounds changes */
 	void commit() { stack.clear(); }
 	/* Domain (numerical parameters) */
-	double feasTol = 1e-5;
+	double feasTol = ABS_FEASTOL;
 	double zeroTol = 1e-9;
 	double infinity = 1e8;
 	double minContRed = 0.1;
