@@ -155,6 +155,41 @@ void SolutionPool::merge(SolutionPool &other)
     other.pool.clear();
 }
 
+
+void SolutionPool::add(std::unique_ptr<Solution> sol, const RankerType ranker, const ValueChooserType chooser, const bool force)
+{
+    if (!sol)
+        return;
+
+    LockGuard lock(*this);
+    consoleLog("found");
+
+
+
+    const bool has_feas = has_feas_unsafe();
+    const double best_obj = has_feas ? pool[solution_rank[0]]->objval : objsense * INFTY;
+
+    bool incumbent = false;
+    if ((has_feas && sol->objval < best_obj) || (!has_feas && sol->isFeas)) {
+        incumbent = true;
+        consoleLog("FPR {} {} found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}", toString(ranker), toString(chooser),
+               sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, sol->timeFound, sol->foundBy);
+    }
+    const auto key = std::make_pair(ranker, chooser);
+    auto &[bestObj, numFeasible, numIncumbent] = strategyStats[key];
+    if (sol->isFeas) {
+        numFeasible++;
+        if (sol->objval < bestObj) {
+            bestObj = sol->objval;
+        }
+        if (incumbent)
+            numIncumbent++;
+    }
+    consoleLog("end");
+
+    add_unsafe(std::move(sol), force);
+}
+
 void SolutionPool::add(std::unique_ptr<Solution> sol, bool force)
 {
     if (!sol)
@@ -166,7 +201,7 @@ void SolutionPool::add(std::unique_ptr<Solution> sol, bool force)
     const double best_obj = has_feas ? pool[solution_rank[0]]->objval : objsense * INFTY;
 
     if ((has_feas && sol->objval < best_obj) || (!has_feas && sol->isFeas))
-        consoleLog("found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}",
+        consoleLog("UNKNOWN found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}",
                sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, sol->timeFound, sol->foundBy);
 
     add_unsafe(std::move(sol), force);
@@ -211,4 +246,15 @@ void SolutionPool::mark_solution_rank_parsed(const int i) const {
     LockGuard lock(*this);
     pool[solution_rank[i]]->isParsed = true;
 
+}
+
+void SolutionPool::print_stats() const {
+    consoleLog("FPR Stats");
+    consoleLog("Ranker Chooser\t NumInc NumFeasible");
+    for (auto& entry : strategyStats) {
+        const RankerType &ranker = entry.first.first;      // <-- first element of the inner pair
+        const ValueChooserType &chooser = entry.first.second; // <-- second element of the inner pair
+        const StrategyStats &stats = entry.second;
+        consoleLog("{<9} {<9}\t {} {}", toString(ranker), toString(chooser), stats.numIncumbent, stats.numFeasible);
+    }
 }
