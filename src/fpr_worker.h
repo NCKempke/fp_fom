@@ -117,7 +117,7 @@ static void fpr_worker(MIPData &mip_data, MIPModelPtr lp,
         }
 
         /* Update the seed in case we do the same experiment twice. */
-        params.seed = seed_orig + ith_run + idx;
+        params.seed = seed_orig + ith_run;
 
         runDFS(mip_data, state.engine, mip_data.solpool, state.lp, params);
         ++ith_run;
