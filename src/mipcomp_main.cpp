@@ -289,9 +289,12 @@ protected:
 	}
 
 	std::unique_ptr<MIPData> read_config_and_problem() {
-		consoleLog("Reading the configuration.");
+#ifdef NDEBUG
+		consoleLog("Mode: optimized.");
+#else
+		consoleLog("Mode: Debug");
+#endif
 		params.readConfig();
-
 		/* set mip competition default parameters */
 		set_mipcomp_params();
 
