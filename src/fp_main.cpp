@@ -83,8 +83,8 @@ static void runPortfolio(MIPData &data, const Params &params)
 	ThreadPool thpool(params.threads);
 
 	/* We run the rankers frac, duals, random, redcosts, and type with random_lp for now. */
-	const std::vector<RankerType> rankers = {RankerType::FRAC, RankerType::DUALS, RankerType::RANDOM, RankerType::REDCOSTS};
-	const std::vector<ValueChooserType> valueChoosers = {ValueChooserType::RANDOM_LP};
+	const std::vector rankers = {RankerType::FRAC, RankerType::DUALS, RankerType::RANDOM, RankerType::REDCOSTS};
+	const std::vector valueChoosers = {ValueChooserType::RANDOM_LP};
 
 	/* Run all combinations. */
 	for (auto &ranker : rankers)
