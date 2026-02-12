@@ -51,7 +51,6 @@ static void fpr_worker(MIPData &mip_data, MIPModelPtr lp,
                        const std::pair<RankerType, ValueChooserType>& fallback_strat,
                        Params params) {
     /* Initialize propagation engine and lp solver. */
-    //TODO: AH @ NK the lp is always copied by value. Is it not sufficient to copy it once?
     WorkerFprState state(mip_data, lp);
     int ith_run = 0;
     bool lp_is_ready = false;
