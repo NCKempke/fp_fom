@@ -170,7 +170,7 @@ void SolutionPool::add(std::unique_ptr<Solution> sol, const RankerType ranker, c
     bool incumbent = false;
     if ((has_feas && sol->objval < best_obj) || (!has_feas && sol->isFeas)) {
         incumbent = true;
-        consoleLog("{:.2f} FPR {} {} found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}", gStopWatch().lap(), toString(ranker), toString(chooser),
+        consoleLog("{:.2f} FPR {} {} found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}", gStopWatch().elapsed(), toString(ranker), toString(chooser),
                sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, sol->timeFound, sol->foundBy);
     }
     const auto key = std::make_pair(ranker, chooser);
@@ -200,7 +200,7 @@ void SolutionPool::add(std::unique_ptr<Solution> sol, const move_type move, cons
     bool incumbent = false;
     if ((has_feas && sol->objval < best_obj) || (!has_feas && sol->isFeas)) {
         incumbent = true;
-        consoleLog("{:.2f} EVOSEARCH {} found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}", gStopWatch().lap(), toString(move),
+        consoleLog("{:.2f} EVOSEARCH {} found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}", gStopWatch().elapsed(), toString(move),
                sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, sol->timeFound, sol->foundBy);
     }
     auto &[bestObj, numFeasible, numIncumbent] = evo_stats[move];
@@ -263,7 +263,7 @@ void SolutionPool::print() const
     {
         const int ith_sol = solution_rank[k];
         const auto& sol = *pool[ith_sol];
-        consoleLog("{:.2f}{:>8}{:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>12.2f}{:>8.2f}  {}", gStopWatch().lap(),
+        consoleLog("{:.2f}{:>8}{:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>12.2f}{:>8.2f}  {}", gStopWatch().elapsed(),
                    k, sol.objval, sol.relViolation, sol.absViolation, sol.isFeas, solDistance(best.x, sol.x), sol.timeFound, sol.foundBy);
     }
 }
