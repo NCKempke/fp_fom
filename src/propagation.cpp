@@ -686,6 +686,8 @@ double PropagationEngine::recomputeViolationRow(int row) {
 		// consoleLog("Violation detected at i = {}", i);
 		violated.add(row);
 	}
+	else
+		viol = 0;
 
 	return viol;
 }
