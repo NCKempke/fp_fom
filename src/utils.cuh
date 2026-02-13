@@ -201,3 +201,34 @@ cudaError_t cudaMemcpyAutoAsync(T* dst, const T* src,
                                const cudaStream_t stream) {
     return cudaMemcpyAsync(dst, src, sizeof(T), cudaMemcpyDefault, stream);
 }
+
+template <typename T>
+inline void copy_host_to_device(const std::vector<T>& h,
+                           thrust::device_vector<T>& d,
+                           cudaStream_t stream)
+{
+    assert(d.size() >= h.size());
+    const size_t bytes = h.size() * sizeof(T);
+
+    cudaError_t err = cudaMemcpyAutoAsync(thrust::raw_pointer_cast(d.data()), h.data(), h.size(), stream);
+
+    if (err != cudaSuccess) {
+        fprintf(stderr, "copy_host_to_device failed: %s\n", cudaGetErrorString(err));
+        std::abort();
+    }
+}
+
+template <typename T>
+inline void copy_device_to_host(const thrust::device_vector<T>& d,
+                           std::vector<T>& h,
+                           cudaStream_t stream)
+{
+    assert(h.size() >= d.size());
+
+    cudaError_t err = cudaMemcpyAutoAsync(h.data(), thrust::raw_pointer_cast(d.data()), d.size(), stream);
+
+    if (err != cudaSuccess) {
+        fprintf(stderr, "copy_device_to_host failed: %s\n", cudaGetErrorString(err));
+        std::abort();
+    }
+}

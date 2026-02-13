@@ -154,8 +154,6 @@ static std::vector<std::unique_ptr<std::atomic<bool> > > submit_fpr_workers(
 		/* clone solver + LP relaxation */
 		MIPModelPtr lp = mip_data.lp->clone();
 
-	    consoleLog("Starting thread");
-
 		thread_pool.enqueue([&, lp, deadline, flag_ptr]{
 			fpr_worker(mip_data, lp, strategies, global_counter, deadline, flag_ptr, fallback_strat, params);
 		});

@@ -1315,7 +1315,7 @@ void EvolutionSearch::load_lp_solution(const MIPData& data, const int solution_i
 
     assert(!active_solutions[solution_index]);
 
-    thrust::copy(thrust::cuda::par.on(sol_stream), data.primals.begin(), data.primals.end(), data_device.current_sol.begin());
+    copy_host_to_device(data.primals, data_device.current_sol, sol_stream);
 
     thrust::transform(thrust::cuda::par.on(sol_stream),
         data_device.current_sol.begin(),
@@ -1337,7 +1337,7 @@ void EvolutionSearch::load_primal_solution(const int solution_index, const std::
 
     assert(!active_solutions[solution_index]);
 
-    thrust::copy(thrust::cuda::par.on(sol_stream), sol.begin(), sol.end(), data_device.current_sol.begin());
+    copy_host_to_device(sol, data_device.current_sol, sol_stream);
 
     active_solutions[solution_index] = true;
 
@@ -1398,7 +1398,7 @@ std::unique_ptr<Solution> make_sol_from_thrust_vector(const MIPInstance &mip, th
     auto sol = std::make_unique<Solution>();
     sol->x.resize(mip.ncols);
 
-    thrust::copy(thrust::cuda::par.on(stream), x.begin(), x.end(), sol->x.begin());
+    copy_device_to_host(x, sol->x, stream);
 
     sol->objval = obj_val;
     sol->isFeas = isFeas;
@@ -1636,6 +1636,8 @@ void EvolutionSearch::load_solutions_from_pool(SolutionPool& solpool, std::vecto
         if (n_loaded == LOAD_N)
             return;
     }
+
+    consoleLog("Loaded {} solutions", n_loaded);
 }
 
 /* Run N iterations of the tabu search.
