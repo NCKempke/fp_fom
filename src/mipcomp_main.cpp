@@ -398,7 +398,7 @@ protected:
 
 		/* For now, run at least 10 seconds. */
 		using namespace std::chrono_literals;
-		while (gStopWatch().elapsed() < params.timeLimit) {
+		while (gStopWatch().elapsed() < 10) {
 			std::this_thread::sleep_for(1ms);
 		}
 
