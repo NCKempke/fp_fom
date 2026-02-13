@@ -276,7 +276,7 @@ TabuSearchKernelArgs *create_args_and_copy_to_device(TabuSearchDataDevice &data,
 
     TabuSearchKernelArgs *device_args;
     cudaMalloc(&device_args, sizeof(TabuSearchKernelArgs));
-    cudaMemcpyAuto(device_args, &args);
+    CHECK_CUDA(cudaMemcpyAuto(device_args, &args));
 
     return device_args;
 }
@@ -1242,13 +1242,13 @@ void EvolutionSearch::recompute_solution_metrics(int solution_index, bool reset)
         cuda::std::plus<double>()
     );
 
-    cudaMemcpyAutoAsync(&(args_device->sum_viol), &sum_viol_total, sol_stream);
+    CHECK_CUDA(cudaMemcpyAutoAsync(&(args_device->sum_viol), &sum_viol_total, sol_stream));
 
     /* update objective */
     // TODO: this is highly inefficient and synchornizes the whole stream! Ideally, we store the result direcly into args_device->objective.
     const double objective = thrust_dot_product(data_device.current_sol, model_device.objective, sol_stream);
 
-    cudaMemcpyAutoAsync(&(args_device->objective), &objective, sol_stream);
+    CHECK_CUDA(cudaMemcpyAutoAsync(&(args_device->objective), &objective, sol_stream));
 
     /* if necessary reset weights and tabu list */
     if (reset) {
@@ -1256,7 +1256,7 @@ void EvolutionSearch::recompute_solution_metrics(int solution_index, bool reset)
         thrust::fill(thrust::cuda::par.on(sol_stream), data_device.constraint_weights.begin(), data_device.constraint_weights.end(), 1);
 
         constexpr double one = 1;
-        cudaMemcpyAutoAsync(&(args_device->objective_weight), &one, sol_stream);
+        CHECK_CUDA(cudaMemcpyAutoAsync(&(args_device->objective_weight), &one, sol_stream));
     }
 
     consoleLog("\tSol{} : Initial solution metrics viol: {} obj {}", solution_index, sum_viol_total, objective);
@@ -1274,14 +1274,14 @@ void EvolutionSearch::recompute_solution_violation_metrics(int solution_index)
                  data_device.violated_constraints.begin(),
                  data_device.violated_constraints.end(),
                  CompareViolatedFirst{args_device});
-    cudaMemcpyAutoAsync(&(args_device->n_violated), &zero, sol_stream);
+    CHECK_CUDA(cudaMemcpyAutoAsync(&(args_device->n_violated), &zero, sol_stream));
 
     CHECK_CUDA(count_violated_kernel<<<n_blocks_dense_row_kernels, dense_row_col_kernels_blocksize, 0, sol_stream>>>(args_device));
 
     if (!GRAPH_ENABLED)
     {
         int n_violated;
-        cudaMemcpyAuto(&n_violated, &(args_device->n_violated));
+        CHECK_CUDA(cudaMemcpyAuto(&n_violated, &(args_device->n_violated)));
 
         consoleLog("\tSol{} : has {} violated constraints", solution_index, n_violated);
     }
@@ -1442,7 +1442,7 @@ void EvolutionSearch::try_store_partial_solution_for_fpr(MIPData& data, int solu
     auto& args_device = args_devices[solution_index];
 
     int is_found_feasible;
-    cudaMemcpyAuto(&is_found_feasible, &(args_device->is_found_feasible));
+    CHECK_CUDA(cudaMemcpyAuto(&is_found_feasible, &(args_device->is_found_feasible)));
 
     /* We only add infeasible solutions. */
     if (is_found_feasible)
@@ -1451,13 +1451,13 @@ void EvolutionSearch::try_store_partial_solution_for_fpr(MIPData& data, int solu
     auto& partials = data.partials;
 
     double objective;
-    cudaMemcpyAuto(&objective, &(args_device->objective));
+    CHECK_CUDA(cudaMemcpyAuto(&objective, &(args_device->objective)));
 
     /* If our solution has a better objective than the best one in the pool, add it. */
     if (partials.n_sols() == 0 || partials.getSol(0).objval > objective) {
         const auto sol_stream = data_device.streams.front();
         double sum_viol;
-        cudaMemcpyAuto(&sum_viol, &(args_device->sum_viol));
+        CHECK_CUDA(cudaMemcpyAuto(&sum_viol, &(args_device->sum_viol)));
 
         consoleInfo("\tSol{} : Moving solution to partial pool", solution_index);
 
@@ -1543,9 +1543,9 @@ void EvolutionSearch::evict_solutions_and_crossover(const MIPData& data) {
         double viol_sol;
         int found_feasible_sol;
 
-        cudaMemcpyAuto(&found_feasible_sol, &(args->is_found_feasible));
-        cudaMemcpyAuto(&obj_sol, &(args->objective));
-        cudaMemcpyAuto(&viol_sol, &(args->sum_viol));
+        CHECK_CUDA(cudaMemcpyAuto(&found_feasible_sol, &(args->is_found_feasible)));
+        CHECK_CUDA(cudaMemcpyAuto(&obj_sol, &(args->objective)));
+        CHECK_CUDA(cudaMemcpyAuto(&viol_sol, &(args->sum_viol)));
 
         found_feasible = found_feasible || found_feasible_sol;
 
@@ -1583,7 +1583,7 @@ void EvolutionSearch::evict_solutions_and_crossover(const MIPData& data) {
 
         const auto& args = args_devices[solution_index];
         double viol_sol;
-        cudaMemcpyAuto(&viol_sol, &(args->sum_viol));
+        CHECK_CUDA(cudaMemcpyAuto(&viol_sol, &(args->sum_viol)));
 
         // Case 1: At least one feasible solution exists.
         // Keep only solutions whose objective is reasonably close
@@ -1591,7 +1591,7 @@ void EvolutionSearch::evict_solutions_and_crossover(const MIPData& data) {
         if (found_feasible) {
 
             double obj_sol;
-            cudaMemcpyAuto(&obj_sol, &(args->objective));
+            CHECK_CUDA(cudaMemcpyAuto(&obj_sol, &(args->objective)));
 
             if ((obj_sol - best_objective) / std::abs(best_objective) > 0.2 || data.mip.maxRhs * model_host.ncols * 0.2 < viol_sol) {
                 active_solutions[solution_index] = false;
@@ -1647,11 +1647,11 @@ void EvolutionSearch::load_solutions_from_pool(SolutionPool& solpool, std::vecto
 #ifdef EXTENDED_DEBUG
         double sum_viol;
         cudaDeviceSynchronize();
-        cudaMemcpyAuto(&sum_viol, &(args_devices[slot]->sum_viol));
+        CHECK_CUDA(cudaMemcpyAuto(&sum_viol, &(args_devices[slot]->sum_viol)));
         assert(sum_viol == 0);
 #endif
         constexpr int one = 1;
-        cudaMemcpyAutoAsync(&(args_devices[slot]->is_found_feasible), &one, data_devices[slot].streams.front());
+        CHECK_CUDA(cudaMemcpyAutoAsync(&(args_devices[slot]->is_found_feasible), &one, data_devices[slot].streams.front()));
 
         ++n_loaded;
         if (n_loaded == LOAD_N)
@@ -1727,7 +1727,7 @@ void EvolutionSearch::run_evolution_search_graph(int solution_index, moves_proba
     if (!GRAPH_ENABLED)
     {
         int n_violated;
-        cudaMemcpyAuto(&n_violated, &(args_device->n_violated));
+        CHECK_CUDA(cudaMemcpyAuto(&n_violated, &(args_device->n_violated)));
         if (n_violated == 0 && solution_index <= 4)
         {
             consoleInfo("\tSol{} : Found feasible!", solution_index);
@@ -1791,9 +1791,9 @@ void EvolutionSearch::run_evolution_search_graph(int solution_index, moves_proba
 #ifdef EXTENDED_DEBUG
         // TODO diable when graph enabled.
         double obj_sol;
-        cudaMemcpyAuto(&obj_sol, &(args_device->objective));
+        CHECK_CUDA(cudaMemcpyAuto(&obj_sol, &(args_device->objective)));
         double sum_viol;
-        cudaMemcpyAuto(&sum_viol, &(args_device->sum_viol));
+        CHECK_CUDA(cudaMemcpyAuto(&sum_viol, &(args_device->sum_viol)));
 
         const double obj_recomp = thrust::inner_product(data_device.current_sol.begin(),
                                                         data_device.current_sol.end(),
@@ -1932,8 +1932,8 @@ void EvolutionSearch::run(MIPData &data) {
             double sum_viol;
             double objective;
             // TODO: use correct stream
-            cudaMemcpyAuto(&sum_viol, &(args_device->sum_viol));
-            cudaMemcpyAuto(&objective, &(args_device->objective));
+            CHECK_CUDA(cudaMemcpyAuto(&sum_viol, &(args_device->sum_viol)));
+            CHECK_CUDA(cudaMemcpyAuto(&objective, &(args_device->objective)));
 
             // TODO: check if the conclusion is correct. checkin on exactly 0 is correct, since if the constraint is with feas tol it is resetted to 0
             bool solution_turned_feasible = (sum_viol == 0);
