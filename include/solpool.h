@@ -60,7 +60,7 @@ public:
     void add(std::unique_ptr<Solution> sol, move_type move, bool force = false);
 
     /* Return a const reference to the solution at index n. The index must be valid! */
-    const Solution getSol(int idx) const;
+    const Solution& getSol(int idx) const;
 
     /* Return whether pool has feasible solutions. */
     bool hasFeas() const;

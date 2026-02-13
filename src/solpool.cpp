@@ -30,7 +30,8 @@ void SolutionPool::unlock() const
     }
 }
 
-const Solution SolutionPool::getSol(int idx) const {
+// returning the address is correct here since the returned solution is not modified anymore
+const Solution& SolutionPool::getSol(int idx) const {
     LockGuard lock(*this);
 
     FP_ASSERT(0 <= idx && idx < pool.size());
