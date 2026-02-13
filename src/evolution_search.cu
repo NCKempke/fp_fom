@@ -1016,7 +1016,7 @@ __global__ void check_update_best_sol(TabuSearchKernelArgs *args) {
     const int thread_id = threadIdx.x + blockIdx.x * blockDim.x;
 
     /* Do nothing if the current iterate is not feasbile. */
-    if (is_zero_feas(args->sum_viol))
+    if (!is_zero_feas(args->sum_viol))
         return;
 
     /* Do nothing if the current iterate is not better then our stored solution. */
@@ -1627,7 +1627,7 @@ void EvolutionSearch::load_solutions_from_pool(SolutionPool& solpool, std::vecto
         double sum_viol;
         cudaDeviceSynchronize();
         cudaMemcpyAuto(&sum_viol, &(args_devices[slot]->sum_viol));
-        assert(args_devices[slot]->sum_viol == 0);
+        assert(sum_viol == 0);
 #endif
         constexpr int one = 1;
         cudaMemcpyAutoAsync(&(args_devices[slot]->is_found_feasible), &one, data_devices[slot].streams.front());
