@@ -35,8 +35,8 @@ public:
 
     double get_obj_cutoff() const { return obj_cutoff.load(std::memory_order_relaxed); };
 
-    /* Add solution to pool; if force == true, always add the solution. */
-    void add(std::unique_ptr<Solution> sol, bool force = false);
+    /* Add solution to pool; if force == true, always add the solution. Returns position of newly added solution. */
+    int add(std::unique_ptr<Solution> sol, bool force = false);
 
     /* Return a const reference to the solution at index n. The index must be valid! */
     const Solution& getSol(int idx) const;
@@ -51,7 +51,10 @@ public:
     int n_sols() const;
 
     /* Get best feasible solution; if !hasSols, returns empty vector. */
-    Solution getIncumbent(int nth_best_sol = 0) const;
+    Solution getIncumbent() const;
+
+    /* Return storage position of n-th best solution. */
+    int getNthBestPos(int idx) const;
 
     /* Return objective of incumbent. Retuns +- INFTY if !hasFeas. */
     double primalBound() const;
@@ -65,8 +68,6 @@ public:
     /* Print solution pool info. */
     void print() const;
 
-    void mark_solution_rank_parsed(int i) const;
-
 private:
     void lock() const;
     void unlock() const;
@@ -74,8 +75,8 @@ private:
     /* Check for feasible solution without locking mutex. */
     bool has_feas_unsafe() const;
 
-    /* Add solution to pool without locking mutex. If force == true, always add the solution. */
-    void add_unsafe(std::unique_ptr<Solution> sol, bool force = false);
+    /* Add solution to pool without locking mutex. If force == true, always add the solution. Returns position of newly added solution in pool. */
+    int add_unsafe(std::unique_ptr<Solution> sol, bool force = false);
 
     struct LockGuard {
         const SolutionPool& pool;

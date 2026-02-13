@@ -380,9 +380,9 @@ protected:
 		// TODO: run GPU FPR on another thread as well (and only 5 CPU fix-and-propagate threads then).
 
 		/* Solve the LP relaxation using PDLP; we use one separate thread for this. */
-		thread_pool.enqueue([&] () {
-			solve_initial_lp(*mip_data, params);
-		});
+		// thread_pool.enqueue([&] () {
+		// 	solve_initial_lp(*mip_data, params);
+		// });
 
 		// TODO: start evolution search in parallel!
 

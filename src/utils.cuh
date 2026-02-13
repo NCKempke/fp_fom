@@ -3,6 +3,8 @@
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 
+#include <type_traits>
+
 constexpr double FEASTOL = 1e-6;
 constexpr double EPSILON = 1e-9;
 constexpr int WARP_SIZE = 32;
@@ -174,4 +176,28 @@ __device__ int get_random_int_thread(curandState &state, int n) {
         randval = 0;
     }
     return randval;
+}
+
+/* Templated wrappers for array copying. */
+template<typename T>
+cudaError_t cudaMemcpyAuto(T* dst, const T* src, size_t count) {
+    return cudaMemcpy(dst, src, count * sizeof(T), cudaMemcpyDefault);
+}
+
+template<typename T>
+cudaError_t cudaMemcpyAutoAsync(T* dst, const T* src, size_t count,
+                               const cudaStream_t stream) {
+    return cudaMemcpyAsync(dst, src, count * sizeof(T), cudaMemcpyDefault, stream);
+}
+
+/* Templated wrappers for single elements. */
+template<typename T>
+cudaError_t cudaMemcpyAuto(T* dst, const T* src) {
+    return cudaMemcpy(dst, src, sizeof(T), cudaMemcpyDefault);
+}
+
+template<typename T>
+cudaError_t cudaMemcpyAutoAsync(T* dst, const T* src,
+                               const cudaStream_t stream) {
+    return cudaMemcpyAsync(dst, src, sizeof(T), cudaMemcpyDefault, stream);
 }

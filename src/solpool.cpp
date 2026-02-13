@@ -62,16 +62,24 @@ int SolutionPool::n_sols() const {
     return pool.size();
 }
 
-Solution SolutionPool::getIncumbent(const int nth_best_sol) const
+Solution SolutionPool::getIncumbent() const
 {
     LockGuard lock(*this);
 
     if (has_feas_unsafe()) {
-        const size_t best_sol = solution_rank[nth_best_sol];
+        const size_t best_sol = solution_rank[0];
         return *pool[best_sol];
     } else  {
         return Solution();
     }
+}
+
+int SolutionPool::getNthBestPos(int idx) const
+{
+    LockGuard lock(*this);
+    FP_ASSERT(0 <= idx && idx < solution_rank.size());
+
+    return solution_rank[idx];
 }
 
 double SolutionPool::primalBound() const
@@ -97,7 +105,7 @@ double SolutionPool::minViolation() const
     }
 }
 
-void SolutionPool::add_unsafe(std::unique_ptr<Solution> sol, bool force) {
+int SolutionPool::add_unsafe(std::unique_ptr<Solution> sol, bool force) {
     // avoid adding duplicates
     auto end = pool.end();
     auto compEq = [&](const std::unique_ptr<Solution>& other)
@@ -107,7 +115,7 @@ void SolutionPool::add_unsafe(std::unique_ptr<Solution> sol, bool force) {
 
     auto itr = std::find_if(pool.begin(), pool.end(), compEq);
     if (itr != end)
-        return;
+        return -1;
 
     const size_t new_index = pool.size();
 
@@ -142,6 +150,8 @@ void SolutionPool::add_unsafe(std::unique_ptr<Solution> sol, bool force) {
         solution_rank.insert(insertPos, new_index);
         pool.push_back(std::move(sol));
     }
+
+    return new_index;
 }
 
 void SolutionPool::merge(SolutionPool &other)
@@ -155,10 +165,10 @@ void SolutionPool::merge(SolutionPool &other)
     other.pool.clear();
 }
 
-void SolutionPool::add(std::unique_ptr<Solution> sol, bool force)
+int SolutionPool::add(std::unique_ptr<Solution> sol, bool force)
 {
     if (!sol)
-        return;
+        return -1;
 
     LockGuard lock(*this);
 
@@ -169,7 +179,7 @@ void SolutionPool::add(std::unique_ptr<Solution> sol, bool force)
         consoleLog("found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}",
                sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, sol->timeFound, sol->foundBy);
 
-    add_unsafe(std::move(sol), force);
+    return add_unsafe(std::move(sol), force);
 }
 
 static double solDistance(std::span<const double> x1, std::span<const double> x2)
@@ -205,10 +215,4 @@ void SolutionPool::print() const
         consoleLog("{:>8}{:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>12.2f}{:>8.2f}  {}",
                    k, sol.objval, sol.relViolation, sol.absViolation, sol.isFeas, solDistance(best.x, sol.x), sol.timeFound, sol.foundBy);
     }
-}
-
-void SolutionPool::mark_solution_rank_parsed(const int i) const {
-    LockGuard lock(*this);
-    pool[solution_rank[i]]->isParsed = true;
-
 }
