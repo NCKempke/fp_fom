@@ -16,6 +16,27 @@ constexpr int WARP_SIZE_HALF = WARP_SIZE / 2;
 #define assert_if_then(antecedent, consequent) (assert(!(antecedent) || (consequent)))
 #define assert_if_then_else(cond, then_expr, else_expr) (assert((!(cond) || (then_expr)) && ((cond) || (else_expr))))
 
+
+#ifndef NDEBUG
+
+#define CHECK_CUDA(...)                                                                                \
+    {                                                                                                  \
+        (__VA_ARGS__);                                                                                 \
+        cudaError_t status = cudaGetLastError();                                                       \
+        if (status != cudaSuccess)                                                                     \
+        {                                                                                              \
+            printf("[%s:%d] CUDA Runtime failed with error %d: %s\n", __FILE__, __LINE__, (int)status, \
+                   cudaGetErrorString(status));                                                        \
+        }                                                                                              \
+    }
+
+#else
+#define CHECK_CUDA(...)                                                                                \
+    {                                                                                                  \
+        (__VA_ARGS__);                                                                                 \
+    }
+#endif
+
 // functions for comparisons with absolute tolerance only
 __device__ __host__ bool is_zero(double a)
 {
@@ -210,12 +231,7 @@ inline void copy_host_to_device(const std::vector<T>& h,
     assert(d.size() >= h.size());
     const size_t bytes = h.size() * sizeof(T);
 
-    cudaError_t err = cudaMemcpyAutoAsync(thrust::raw_pointer_cast(d.data()), h.data(), h.size(), stream);
-
-    if (err != cudaSuccess) {
-        fprintf(stderr, "copy_host_to_device failed: %s\n", cudaGetErrorString(err));
-        std::abort();
-    }
+    CHECK_CUDA(cudaMemcpyAutoAsync(thrust::raw_pointer_cast(d.data()), h.data(), h.size(), stream));
 }
 
 template <typename T>
@@ -225,10 +241,5 @@ inline void copy_device_to_host(const thrust::device_vector<T>& d,
 {
     assert(h.size() >= d.size());
 
-    cudaError_t err = cudaMemcpyAutoAsync(h.data(), thrust::raw_pointer_cast(d.data()), d.size(), stream);
-
-    if (err != cudaSuccess) {
-        fprintf(stderr, "copy_device_to_host failed: %s\n", cudaGetErrorString(err));
-        std::abort();
-    }
+    CHECK_CUDA(cudaMemcpyAutoAsync(h.data(), thrust::raw_pointer_cast(d.data()), d.size(), stream));
 }

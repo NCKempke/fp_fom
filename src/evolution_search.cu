@@ -987,6 +987,7 @@ __global__ void apply_move(const GpuModelPtrs model, TabuSearchKernelArgs *args,
 /* Check whether curren_sol can be stored as new best solution in this solution stream (args->best_sol). */
 __global__ void check_update_best_sol(TabuSearchKernelArgs *args) {
     const int thread_id = threadIdx.x + blockIdx.x * blockDim.x;
+    const int stride = blockDim.x * gridDim.x;
 
     /* Do nothing if the current iterate is not feasbile. */
     if (!is_zero_feas(args->sum_viol))
@@ -996,7 +997,7 @@ __global__ void check_update_best_sol(TabuSearchKernelArgs *args) {
     if (args->is_found_feasible && is_gt(args->objective, args->best_objective))
         return;
 
-    for (int jcol = thread_id; jcol < args->ncols; jcol += blockDim.x * gridDim.x)
+    for (int jcol = thread_id; jcol < args->ncols; jcol += stride)
         args->best_sol[jcol] = args->current_sol[jcol];
 
     if (thread_id == 0) {
@@ -1029,22 +1030,24 @@ __global__ void csr_spmv_kernel(
 }
 
 /* Count all elements of vector where pred(vector[i]) == true. Adds result on device to res_device. */
-__global__ void count_violated_kernel(TabuSearchKernelArgs* args_device) {
+__global__ void count_violated_kernel(TabuSearchKernelArgs *args_device)
+{
     const int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
-    /* Do not ealy abort, BlockReduce assumes all threads of the block participate. */
+    /* Do not early abort, BlockReduce assumes all threads of the block participate. */
     int count_thread = 0;
 
-    for (int i = thread_idx; i < args_device->nrows; i += stride) {
-            const int is_eq = i < args_device->n_equalities;
-            const double slack_row = args_device->slacks[i];
+    for (int i = thread_idx; i < args_device->nrows; i += stride)
+    {
+        const int is_eq = i < args_device->n_equalities;
+        const double slack_row = args_device->slacks[i];
 
-            /* If we have an equality, any slack counts. If we have an inequality, we only count negative slack rhs - Ax >= 0. Branching does not really matter here. */
-            const bool is_violated = is_eq ? !is_eq_feas(slack_row, 0) : is_lt_feas(slack_row, 0);
+        /* If we have an equality, any slack counts. If we have an inequality, we only count negative slack rhs - Ax >= 0. Branching does not really matter here. */
+        const bool is_violated = is_eq ? !is_eq_feas(slack_row, 0) : is_lt_feas(slack_row, 0);
 
-            if (is_violated)
-                ++count_thread;
+        if (is_violated)
+            ++count_thread;
     }
 
     /* Block wide reduce of count_thread. */
@@ -1057,7 +1060,8 @@ __global__ void count_violated_kernel(TabuSearchKernelArgs* args_device) {
     const int count_block = BlockReduce(temp_storage).Sum(count_thread);
 
     /* Thread 0 of each block adds to res_device atomically. So use threadIdx.x instead of thread_idx. */
-    if (threadIdx.x == 0) {
+    if (threadIdx.x == 0)
+    {
         atomicAdd(&(args_device->n_violated), count_block);
     }
 }
@@ -1205,12 +1209,11 @@ std::tuple<std::array<int, AVAILABLE_MOVES>, std::array<move_config, AVAILABLE_M
 void EvolutionSearch::recompute_solution_metrics(int solution_index, bool reset) {
     auto& data_device = data_devices[solution_index];
     auto& args_device = args_devices[solution_index];
-    const auto& sol_stream = data_device.streams.front();
+    const auto &sol_stream = data_device.streams.front();
 
     /* calculate slack */
     thrust::copy(thrust::cuda::par.on(sol_stream), model_device.rhs.begin(), model_device.rhs.end(), data_device.slacks.begin());
-    csr_spmv_kernel<<<512, 1024, 0, sol_stream>>>(model_device.nrows, gpu_model_ptrs, thrust::raw_pointer_cast(data_device.current_sol.data()), -1.0,
-                thrust::raw_pointer_cast(data_device.slacks.data()));
+    CHECK_CUDA(csr_spmv_kernel<<<512, 256, 0, sol_stream>>>(model_device.nrows, gpu_model_ptrs, thrust::raw_pointer_cast(data_device.current_sol.data()), -1.0, thrust::raw_pointer_cast(data_device.slacks.data())));
 
     /* calculate violations for equations */
     // TODO: this is highly inefficient and synchornizes the whole stream! Ideally, we store the result direcly into args_device->sum_viol.
@@ -1273,7 +1276,7 @@ void EvolutionSearch::recompute_solution_violation_metrics(int solution_index)
                  CompareViolatedFirst{args_device});
     cudaMemcpyAutoAsync(&(args_device->n_violated), &zero, sol_stream);
 
-    count_violated_kernel<<<n_blocks_dense_row_kernels, dense_row_col_kernels_blocksize, 0, sol_stream>>>(args_device);
+    CHECK_CUDA(count_violated_kernel<<<n_blocks_dense_row_kernels, dense_row_col_kernels_blocksize, 0, sol_stream>>>(args_device));
 
     if (!GRAPH_ENABLED)
     {
@@ -1372,28 +1375,28 @@ void EvolutionSearch::launch_move_kernels_to_stream(
     auto& args_device = args_devices[solution_index];
 
     FP_ASSERT(blocks_per_move[0] > 0);
-    compute_random_moves_kernel<<<blocks_per_move[0], BLOCKSIZE_MOVE, 0, data_device.streams[0]>>>(
-        gpu_model_ptrs, args_device, config_per_move[0]);
+    CHECK_CUDA(compute_random_moves_kernel<<<blocks_per_move[0], BLOCKSIZE_MOVE, 0, data_device.streams[0]>>>(
+        gpu_model_ptrs, args_device, config_per_move[0]));
 
     FP_ASSERT(blocks_per_move[1] > 0);
-    compute_oneopt_moves_kernel<false><<<blocks_per_move[1], BLOCKSIZE_MOVE, 0, data_device.streams[1]>>>(
-        gpu_model_ptrs, args_device, config_per_move[1]);
+    CHECK_CUDA(compute_oneopt_moves_kernel<false><<<blocks_per_move[1], BLOCKSIZE_MOVE, 0, data_device.streams[1]>>>(
+        gpu_model_ptrs, args_device, config_per_move[1]));
 
     FP_ASSERT(blocks_per_move[2] > 0);
-    compute_oneopt_moves_kernel<true><<<blocks_per_move[2], BLOCKSIZE_MOVE, 0, data_device.streams[2]>>>(
-        gpu_model_ptrs, args_device, config_per_move[2]);
+    CHECK_CUDA(compute_oneopt_moves_kernel<true><<<blocks_per_move[2], BLOCKSIZE_MOVE, 0, data_device.streams[2]>>>(
+        gpu_model_ptrs, args_device, config_per_move[2]));
 
     FP_ASSERT(blocks_per_move[3] > 0);
-    compute_flip_moves_kernel<<<blocks_per_move[3], BLOCKSIZE_MOVE, 0, data_device.streams[3]>>>(
-        gpu_model_ptrs, args_device, config_per_move[3]);
+    CHECK_CUDA(compute_flip_moves_kernel<<<blocks_per_move[3], BLOCKSIZE_MOVE, 0, data_device.streams[3]>>>(
+        gpu_model_ptrs, args_device, config_per_move[3]));
 
     FP_ASSERT(blocks_per_move[4] > 0);
-    compute_mtm_unsat_moves_kernel<<<blocks_per_move[4], BLOCKSIZE_MOVE, 0, data_device.streams[4]>>>(
-        gpu_model_ptrs, args_device, config_per_move[4]);
+    CHECK_CUDA(compute_mtm_unsat_moves_kernel<<<blocks_per_move[4], BLOCKSIZE_MOVE, 0, data_device.streams[4]>>>(
+        gpu_model_ptrs, args_device, config_per_move[4]));
 
     FP_ASSERT(blocks_per_move[5] > 0);
-    compute_mtm_sat_moves_kernel<<<blocks_per_move[5], BLOCKSIZE_MOVE, 0, data_device.streams[5]>>>(
-        gpu_model_ptrs, args_device, config_per_move[5]);
+    CHECK_CUDA(compute_mtm_sat_moves_kernel<<<blocks_per_move[5], BLOCKSIZE_MOVE, 0, data_device.streams[5]>>>(
+        gpu_model_ptrs, args_device, config_per_move[5]));
 
     for (auto &stream : data_device.streams)
     {
@@ -1744,7 +1747,7 @@ void EvolutionSearch::run_evolution_search_graph(int solution_index, moves_proba
         /* Update the weights and continue!  */
         const bool smoothing = dist(gen) < SMOOTHING_PROBABILITY;
 
-        update_weights_kernel<<<n_blocks_dense_row_kernels, dense_row_col_kernels_blocksize, 0, sol_stream>>>(args_device, smoothing);
+        CHECK_CUDA(update_weights_kernel<<<n_blocks_dense_row_kernels, dense_row_col_kernels_blocksize, 0, sol_stream>>>(args_device, smoothing));
     }
     else
     {
@@ -1778,11 +1781,11 @@ void EvolutionSearch::run_evolution_search_graph(int solution_index, moves_proba
                    toString(selected_move), score.objective_change, score.violation_change, score.weighted_violation_change);
 #endif
         /* Apply best move. */
-        apply_move<<<1, 1024, 0, sol_stream>>>(gpu_model_ptrs, args_device,
+        CHECK_CUDA(apply_move<<<1, 1024, 0, sol_stream>>>(gpu_model_ptrs, args_device,
                                                thrust::raw_pointer_cast(moves.data()) + min_index,
-                                               thrust::raw_pointer_cast(scores.data()) + min_index);
+                                               thrust::raw_pointer_cast(scores.data()) + min_index));
 
-        check_update_best_sol<<<n_blocks_dense_row_kernels, dense_row_col_kernels_blocksize, 0, sol_stream>>>(args_device);
+        CHECK_CUDA(check_update_best_sol<<<n_blocks_dense_row_kernels, dense_row_col_kernels_blocksize, 0, sol_stream>>>(args_device));
         cudaStreamSynchronize(sol_stream);
 
 #ifdef EXTENDED_DEBUG

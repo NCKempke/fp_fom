@@ -5,7 +5,7 @@
 
 constexpr int AVAILABLE_MOVES = 6;
 
-constexpr int dense_row_col_kernels_blocksize = 1024;
+constexpr int dense_row_col_kernels_blocksize = 256;
 
 
 using moves_probability = std::array<double, AVAILABLE_MOVES>;
