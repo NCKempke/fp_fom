@@ -1029,17 +1029,22 @@ __global__ void csr_spmv_kernel(
 }
 
 /* Count all elements of vector where pred(vector[i]) == true. Adds result on device to res_device. */
-template <typename PRED, typename T>
-__global__ void count_if_kernel (const T* vector, int n, int* res_device, PRED pred) {
+__global__ void count_violated_kernel(TabuSearchKernelArgs* args_device) {
     const int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
     /* Do not ealy abort, BlockReduce assumes all threads of the block participate. */
     int count_thread = 0;
 
-    for (int i = thread_idx; i < n; i += stride) {
-        if (pred(vector[i]))
-            ++count_thread;
+    for (int i = thread_idx; i < args_device->nrows; i += stride) {
+            const int is_eq = i < args_device->n_equalities;
+            const double slack_row = args_device->slacks[i];
+
+            /* If we have an equality, any slack counts. If we have an inequality, we only count negative slack rhs - Ax >= 0. Branching does not really matter here. */
+            const bool is_violated = is_eq ? !is_eq_feas(slack_row, 0) : is_lt_feas(slack_row, 0);
+
+            if (is_violated)
+                ++count_thread;
     }
 
     /* Block wide reduce of count_thread. */
@@ -1053,7 +1058,7 @@ __global__ void count_if_kernel (const T* vector, int n, int* res_device, PRED p
 
     /* Thread 0 of each block adds to res_device atomically. So use threadIdx.x instead of thread_idx. */
     if (threadIdx.x == 0) {
-        atomicAdd(res_device, count_block);
+        atomicAdd(&(args_device->n_violated), count_block);
     }
 }
 
@@ -1071,21 +1076,6 @@ double thrust_dot_product(const thrust::device_vector<double> &a,
         0.0 /* Init value */
     );
 }
-
-/* Use thrust to partition into violated and non-violated constraints. */
-struct IsViolated
-{
-    const TabuSearchKernelArgs* args;
-
-    __device__ bool operator()(int idx) const
-    {
-        const int is_eq = idx < args->n_equalities;
-        const double slack_row = args->slacks[idx];
-
-        /* If we have an equality, any slack counts. If we have an inequality, we only count negative slack rhs - Ax >= 0. Branching does not really matter here. */
-        return is_eq ? !is_eq_feas(slack_row, 0) : is_lt_feas(slack_row, 0); // TODO: use tolerances.h when merged from other branch.
-    }
-};
 
 struct CompareViolatedFirst
 {
@@ -1283,7 +1273,7 @@ void EvolutionSearch::recompute_solution_violation_metrics(int solution_index)
                  CompareViolatedFirst{args_device});
     cudaMemcpyAutoAsync(&(args_device->n_violated), &zero, sol_stream);
 
-    count_if_kernel<<<n_blocks_dense_row_kernels, dense_row_col_kernels_blocksize, 0, sol_stream>>>(args_device->slacks, model_host.nrows, &(args_device->n_violated), IsViolated{args_device});
+    count_violated_kernel<<<n_blocks_dense_row_kernels, dense_row_col_kernels_blocksize, 0, sol_stream>>>(args_device);
 
     if (!GRAPH_ENABLED)
     {
