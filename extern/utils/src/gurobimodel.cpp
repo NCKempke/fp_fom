@@ -48,6 +48,7 @@ static void throwGurobiError(GRBenv *env)
 template <typename Func, typename... Args>
 void GUROBI_CALL(Func gurobifunc, GRBenv *env, GRBmodel *prob, Args &&...args)
 {
+
     int status = gurobifunc(prob, std::forward<Args>(args)...);
     if (status)
         throwGurobiError(env);
@@ -237,6 +238,11 @@ void GUROBIModel::sol(double *x, int first, int last) const
 void GUROBIModel::dual_sol(double *y) const
 {
     FP_ASSERT(env && prob);
+#ifndef NDEBUG
+    int status;
+    GUROBI_CALL(GRBgetintattr, GRBgetenv(prob), prob, GRB_INT_ATTR_STATUS, &status);
+    assert (status == GRB_OPTIMAL);
+#endif
     GUROBI_CALL(GRBgetdblattrarray, GRBgetenv(prob), prob, GRB_DBL_ATTR_PI, 0, nrows(), y);
 }
 

@@ -173,7 +173,7 @@ struct Params
 public:
 	/* Global parameters */
 	uint64_t seed = 20250101;
-	double timeLimit = 1200;
+	double timeLimit = 3000;
 	int threads = 32;
 	int maxTries = 1;
 

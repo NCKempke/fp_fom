@@ -1,10 +1,11 @@
 #include "solpool.h"
+#include <consolelog.h>
 
 #include "solution.h"
 #include "tolerances.h"
 #include "tool_assert.h"
-
-#include <consolelog.h>
+#include "move_type.h"
+#include "timer.h"
 
 SolutionPool::SolutionPool(int ncols_, double objsense_, bool thread_safe_) : ncols(ncols_), objsense(objsense_), thread_safe(thread_safe_)
 {
@@ -29,6 +30,7 @@ void SolutionPool::unlock() const
     }
 }
 
+// returning the address is correct here since the returned solution is not modified anymore
 const Solution& SolutionPool::getSol(int idx) const {
     LockGuard lock(*this);
 
@@ -141,8 +143,9 @@ int SolutionPool::add_unsafe(std::unique_ptr<Solution> sol, bool force) {
         if (insertPos == solution_rank.begin()) {
             const double newobj = objsense * sol->objval;
 
-            FP_ASSERT(!sol->isFeas || objsense * sol->objval < get_obj_cutoff());
-            obj_cutoff.store(newobj);
+            //TODO: if threads run in parallel solution can be submitted that violate the cutoff due to sync?
+            if ((!sol->isFeas || objsense * sol->objval < get_obj_cutoff()));
+                obj_cutoff.store(newobj);
         } else {
             FP_ASSERT(!sol->isFeas || objsense * sol->objval >= get_obj_cutoff());
         }
@@ -165,6 +168,66 @@ void SolutionPool::merge(SolutionPool &other)
     other.pool.clear();
 }
 
+
+int SolutionPool::add(std::unique_ptr<Solution> sol, const RankerType ranker, const ValueChooserType chooser, const bool force)
+{
+    if (!sol)
+        return -1;
+
+    LockGuard lock(*this);
+
+    const bool has_feas = has_feas_unsafe();
+    const double best_obj = has_feas ? pool[solution_rank[0]]->objval : objsense * INFTY;
+
+    bool incumbent = false;
+    if ((has_feas && sol->objval < best_obj) || (!has_feas && sol->isFeas)) {
+        incumbent = true;
+        consoleLog("{:.2f} FPR {} {} found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}", gStopWatch().elapsed(), toString(ranker), toString(chooser),
+               sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, sol->timeFound, sol->foundBy);
+    }
+    const auto key = std::make_pair(ranker, chooser);
+    auto &[bestObj, numFeasible, numIncumbent] = dfs_stats[key];
+    if (sol->isFeas) {
+        numFeasible++;
+        if (sol->objval < bestObj) {
+            bestObj = sol->objval;
+        }
+        if (incumbent)
+            numIncumbent++;
+    }
+
+    return add_unsafe(std::move(sol), force);
+}
+
+int SolutionPool::add(std::unique_ptr<Solution> sol, const move_type move, const bool force)
+{
+    if (!sol)
+        return -1;
+
+    LockGuard lock(*this);
+
+    const bool has_feas = has_feas_unsafe();
+    const double best_obj = has_feas ? pool[solution_rank[0]]->objval : objsense * INFTY;
+
+    bool incumbent = false;
+    if ((has_feas && sol->objval < best_obj) || (!has_feas && sol->isFeas)) {
+        incumbent = true;
+        consoleLog("{:.2f} EVOSEARCH {} found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}", gStopWatch().elapsed(), toString(move),
+               sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, sol->timeFound, sol->foundBy);
+    }
+    auto &[bestObj, numFeasible, numIncumbent] = evo_stats[move];
+    if (sol->isFeas) {
+        numFeasible++;
+        if (sol->objval < bestObj) {
+            bestObj = sol->objval;
+        }
+        if (incumbent)
+            numIncumbent++;
+    }
+    return add_unsafe(std::move(sol), force);
+}
+
+
 int SolutionPool::add(std::unique_ptr<Solution> sol, bool force)
 {
     if (!sol)
@@ -176,7 +239,7 @@ int SolutionPool::add(std::unique_ptr<Solution> sol, bool force)
     const double best_obj = has_feas ? pool[solution_rank[0]]->objval : objsense * INFTY;
 
     if ((has_feas && sol->objval < best_obj) || (!has_feas && sol->isFeas))
-        consoleLog("found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}",
+        consoleLog("UNKNOWN found new incumbent : {:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>8.2f}  {}",
                sol->objval, sol->relViolation, sol->absViolation, sol->isFeas, sol->timeFound, sol->foundBy);
 
     return add_unsafe(std::move(sol), force);
@@ -212,7 +275,54 @@ void SolutionPool::print() const
     {
         const int ith_sol = solution_rank[k];
         const auto& sol = *pool[ith_sol];
-        consoleLog("{:>8}{:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>12.2f}{:>8.2f}  {}",
+        consoleLog("{:.2f}{:>8}{:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>12.2f}{:>8.2f}  {}", gStopWatch().elapsed(),
                    k, sol.objval, sol.relViolation, sol.absViolation, sol.isFeas, solDistance(best.x, sol.x), sol.timeFound, sol.foundBy);
+    }
+}
+
+void SolutionPool::mark_solution_rank_parsed(const int i) const {
+    LockGuard lock(*this);
+    pool[solution_rank[i]]->isParsed = true;
+
+}
+
+void SolutionPool::print_stats() const {
+    if (!dfs_stats.empty()) {
+        consoleLog("FPR Stats");
+        consoleLog("{:<12} {:<12} {:>12} {:>12}",
+                   "Ranker", "Chooser", "NumInc", "NumFeasible");
+
+        for (const auto& entry : dfs_stats) {
+            const RankerType& ranker = entry.first.first;
+            const ValueChooserType& chooser = entry.first.second;
+            const StrategyStats& stats = entry.second;
+
+            consoleLog("{:<12} {:<12} {:>12} {:>12}",
+                       toString(ranker),
+                       toString(chooser),
+                       stats.numIncumbent,
+                       stats.numFeasible);
+        }
+    }
+    else {
+        consoleLog("FPR did not found a solution");
+    }
+    if (evo_stats.empty()) {
+        consoleLog("EVO SEARCH did not found a solution");
+        return;
+    }
+    consoleLog("");
+    consoleLog("EVO Stats");
+    consoleLog("{:<12} {:>12} {:>12}",
+               "Move", "NumInc", "NumFeasible");
+
+    for (const auto& entry : evo_stats) {
+        const move_type& move = entry.first;
+        const StrategyStats& stats = entry.second;
+
+        consoleLog("{:<12} {:>12} {:>12}",
+                   toString(move),
+                   stats.numIncumbent,
+                   stats.numFeasible);
     }
 }

@@ -253,7 +253,7 @@ void dfsSearch(const MIPData& data, PropagationEngine& engine, SolutionPool& poo
 			sol_ptr->timeFound = gStopWatch().elapsed();
 			sol_ptr->foundBy = strat_name;
 
-			pool.add(std::move(sol_ptr));
+			pool.add(std::move(sol_ptr), params.ranker, params.valueChooser);
 			if (isFeas)
 				numSolutions++;
 		}
@@ -371,7 +371,7 @@ static void runDFS(const MIPData& data, PropagationEngine& engine, SolutionPool&
 			sol_ptr->timeFound = gStopWatch().elapsed();
 			const std::string strat_name = fmt::format("{}_{}", toString(params.ranker), toString(params.valueChooser));
 			sol_ptr->foundBy = strat_name;
-			pool.add(std::move(sol_ptr));
+			pool.add(std::move(sol_ptr), params.ranker, params.valueChooser);
 		}
 	}
 
