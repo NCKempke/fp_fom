@@ -5,6 +5,9 @@
 
 constexpr int AVAILABLE_MOVES = 6;
 
+constexpr int dense_row_col_kernels_blocksize = 1024;
+
+
 using moves_probability = std::array<double, AVAILABLE_MOVES>;
 
 class MIPInstance;
@@ -145,12 +148,15 @@ public:
     int n_moves_total = 1e5;
     int n_rounds = 10000;
 
-
     /* A column is tabu if it got moved during the last n_tabu iterations. Apply move marks a column at tabu by recording the
      * current iteration in the tabu array. When computing a move, we check whether tabu[col] >= iteration - n_tabu, if so,
      * the column may not be used.
      */
     int tabu_tenure = 10;
+
+    /* For kernels processing a single dense row or column, we always submit blocks of size dense_row_col_kernels_blocksize. The gridSize for these kernels is at most 512 but may be much lower, if the columns/rows of a given problem are short. The two following members should be considered const and are set in the EvolutionSearch constructor. */
+    int n_blocks_dense_row_kernels = 512;
+    int n_blocks_dense_column_kernels = 512;
 
     EvolutionSearch(const MIPInstance& model_host, const GpuModel& model_device);
 
@@ -163,6 +169,7 @@ public:
     void recompute_solution_metrics(int solution_index, bool reset = false);
 
     /* Recomputes number of violated constraints of given solution. */
+    template <const bool GRAPH_ENABLED>
     void recompute_solution_violation_metrics(int solution_index);
 
     /* Load an initial solution to solution_index using init_value */

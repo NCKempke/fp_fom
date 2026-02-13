@@ -44,8 +44,6 @@ static_assert(BLOCKSIZE_MOVE % WARP_SIZE == 0);
 constexpr int N_MOVES_PER_WARP = 32;
 constexpr int N_MOVES_PER_SINGLE_COL_BLOCK = N_MOVES_PER_WARP * N_WARPS_PER_BLOCK;
 
-constexpr int BLOCKSIZE_VECTOR_KERNEL = 1024; /* Blocksize used for vector kernels (each thread operating on one vector element). */
-
 /* CUDA graph setup. */
 constexpr bool GRAPH_ENABLE = true; /* Turn off for debugging and extra output. */
 constexpr int GRAPH_N_ITER = 100; /* Amount of iterations done per graph submission. */
@@ -232,6 +230,8 @@ TabuSearchDataDevice::TabuSearchDataDevice(const int nrows_, const int ncols_, c
 {
     for (size_t i = 0; i < AVAILABLE_MOVES; ++i)
         cudaStreamCreate(&streams[i]);
+
+    thrust::sequence(thrust::cuda::par.on(streams.front()), violated_constraints.begin(), violated_constraints.end());
 };
 
 TabuSearchDataDevice::~TabuSearchDataDevice()
@@ -996,7 +996,7 @@ __global__ void check_update_best_sol(TabuSearchKernelArgs *args) {
     if (args->is_found_feasible && is_gt(args->objective, args->best_objective))
         return;
 
-    for (int jcol = thread_id; jcol < args->ncols; jcol += blockDim.x)
+    for (int jcol = thread_id; jcol < args->ncols; jcol += blockDim.x * gridDim.x)
         args->best_sol[jcol] = args->current_sol[jcol];
 
     if (thread_id == 0) {
@@ -1028,6 +1028,35 @@ __global__ void csr_spmv_kernel(
     y[row] += alpha * sum;
 }
 
+/* Count all elements of vector where pred(vector[i]) == true. Adds result on device to res_device. */
+template <typename PRED, typename T>
+__global__ void count_if_kernel (const T* vector, int n, int* res_device, PRED pred) {
+    const int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    /* Do not ealy abort, BlockReduce assumes all threads of the block participate. */
+    int count_thread = 0;
+
+    for (int i = thread_idx; i < n; i += stride) {
+        if (pred(vector[i]))
+            ++count_thread;
+    }
+
+    /* Block wide reduce of count_thread. */
+    using BlockReduce = cub::BlockReduce<int, dense_row_col_kernels_blocksize>;
+
+    /* Allocate shared memory for BlockReduce. */
+    __shared__ BlockReduce::TempStorage temp_storage;
+
+    /* Reduce all slack changes to thread 0 of this block. */
+    const int count_block = BlockReduce(temp_storage).Sum(count_thread);
+
+    /* Thread 0 of each block adds to res_device atomically. So use threadIdx.x instead of thread_idx. */
+    if (threadIdx.x == 0) {
+        atomicAdd(res_device, count_block);
+    }
+}
+
 double thrust_dot_product(const thrust::device_vector<double> &a,
                           const thrust::device_vector<double> &b, const cudaStream_t stream)
 {
@@ -1055,6 +1084,27 @@ struct IsViolated
 
         /* If we have an equality, any slack counts. If we have an inequality, we only count negative slack rhs - Ax >= 0. Branching does not really matter here. */
         return is_eq ? !is_eq_feas(slack_row, 0) : is_lt_feas(slack_row, 0); // TODO: use tolerances.h when merged from other branch.
+    }
+};
+
+struct CompareViolatedFirst
+{
+    const TabuSearchKernelArgs* args;
+
+    __device__ bool operator()(int i1, int i2) const
+    {
+        const int is_eq1 = i1 < args->n_equalities;
+        const int is_eq2 = i2 < args->n_equalities;
+
+        const double slack_row1 = args->slacks[i1];
+        const double slack_row2 = args->slacks[i2];
+
+        /* If we have an equality, any slack counts. If we have an inequality, we only count negative slack rhs - Ax >= 0. Branching does not really matter here. */
+        const bool is_viol1 = is_eq1 ? !is_eq_feas(slack_row1, 0) : is_lt_feas(slack_row1, 0);
+        const bool is_viol2 = is_eq2 ? !is_eq_feas(slack_row2, 0) : is_lt_feas(slack_row2, 0);
+
+        /* For both violated return the smaller index, else return the violated constraint. */
+        return (is_viol1 && is_viol2) ? (i1 < i2) : (is_viol1 ? i1 : i2);
     }
 };
 
@@ -1219,24 +1269,29 @@ void EvolutionSearch::recompute_solution_metrics(int solution_index, bool reset)
     consoleLog("\tSol{} : Initial solution metrics viol: {} obj {}", solution_index, sum_viol_total, objective);
 }
 
+template <const bool GRAPH_ENABLED>
 void EvolutionSearch::recompute_solution_violation_metrics(int solution_index)
 {
+    const int zero = 0;
     auto& data_device = data_devices[solution_index];
     auto& args_device = args_devices[solution_index];
     const auto sol_stream = data_device.streams.front();
 
-    thrust::sequence(thrust::cuda::par.on(sol_stream), data_device.violated_constraints.begin(), data_device.violated_constraints.end());
+    thrust::sort(thrust::cuda::par.on(sol_stream),
+                 data_device.violated_constraints.begin(),
+                 data_device.violated_constraints.end(),
+                 CompareViolatedFirst{args_device});
+    cudaMemcpyAutoAsync(&(args_device->n_violated), &zero, sol_stream);
 
-    // TODO ! Device only kernel for n_violated!
-    const auto partition_point = thrust::partition(thrust::cuda::par.on(sol_stream),
-                                                   data_device.violated_constraints.begin(),
-                                                   data_device.violated_constraints.end(),
-                                                   IsViolated{args_device});
+    count_if_kernel<<<n_blocks_dense_row_kernels, dense_row_col_kernels_blocksize, 0, sol_stream>>>(args_device->slacks, model_host.nrows, &(args_device->n_violated), IsViolated{args_device});
 
-    const int n_violated = partition_point - data_device.violated_constraints.begin();
-    cudaMemcpyAutoAsync(&(args_device->n_violated), &n_violated, sol_stream);
+    if (!GRAPH_ENABLED)
+    {
+        int n_violated;
+        cudaMemcpyAuto(&n_violated, &(args_device->n_violated));
 
-    consoleLog("\tSol{} : has {} violated constraints", solution_index, n_violated);
+        consoleLog("\tSol{} : has {} violated constraints", solution_index, n_violated);
+    }
 }
 
 void EvolutionSearch::load_initial_solutions(
@@ -1628,7 +1683,7 @@ void EvolutionSearch::load_solutions_from_pool(SolutionPool& solpool, std::vecto
 We do not communicate solutions during this search. Rather, when applying a move, we check whether the
  * new solution is better than the best solution found during this batch of iterations. If it is, we swap best_sol
  */
-template <const bool GRAPH_ENABLE>
+template <const bool GRAPH_ENABLED>
 void EvolutionSearch::run_evolution_search_graph(int solution_index, moves_probability& probabilities, int& seed)
 {
     auto& data_device = data_devices[solution_index];
@@ -1656,7 +1711,7 @@ void EvolutionSearch::run_evolution_search_graph(int solution_index, moves_proba
     // bool capture = true;
     // if (capture) {
 
-        recompute_solution_violation_metrics(solution_index);
+        recompute_solution_violation_metrics<GRAPH_ENABLED>(solution_index);
 
         /* Submits all moves on separate streams and synchronizes afterwards. */
         launch_move_kernels_to_stream(solution_index, blocks_per_move, config_per_move);
@@ -1676,7 +1731,7 @@ void EvolutionSearch::run_evolution_search_graph(int solution_index, moves_proba
     // }
 
 #ifdef EXTENDED_DEBUG
-    if (!GRAPH_ENABLE)
+    if (!GRAPH_ENABLED)
     {
         int n_violated;
         cudaMemcpyAuto(&n_violated, &(args_device->n_violated));
@@ -1695,12 +1750,11 @@ void EvolutionSearch::run_evolution_search_graph(int solution_index, moves_proba
     if (score.weighted_violation_change >= 0.0)
     {
         consoleLog("\tSol{} : No more good moves; updating weights!", solution_index);
-        const int n_blocks = (model_host.nrows + BLOCKSIZE_VECTOR_KERNEL - 1) / BLOCKSIZE_VECTOR_KERNEL;
 
         /* Update the weights and continue!  */
         const bool smoothing = dist(gen) < SMOOTHING_PROBABILITY;
 
-        update_weights_kernel<<<n_blocks, BLOCKSIZE_VECTOR_KERNEL, 0, sol_stream>>>(args_device, smoothing);
+        update_weights_kernel<<<n_blocks_dense_row_kernels, dense_row_col_kernels_blocksize, 0, sol_stream>>>(args_device, smoothing);
     }
     else
     {
@@ -1738,7 +1792,7 @@ void EvolutionSearch::run_evolution_search_graph(int solution_index, moves_proba
                                                thrust::raw_pointer_cast(moves.data()) + min_index,
                                                thrust::raw_pointer_cast(scores.data()) + min_index);
 
-        check_update_best_sol<<<512, 1024, 0, sol_stream>>>(args_device);
+        check_update_best_sol<<<n_blocks_dense_row_kernels, dense_row_col_kernels_blocksize, 0, sol_stream>>>(args_device);
         cudaStreamSynchronize(sol_stream);
 
 #ifdef EXTENDED_DEBUG
@@ -1794,6 +1848,13 @@ EvolutionSearch::EvolutionSearch(const MIPInstance& model_host_, const GpuModel&
         data_devices.emplace_back(model_host.nrows, model_host.ncols, tabu_tenure);
         args_devices.emplace_back(create_args_and_copy_to_device(data_devices[i], model_host, tabu_tenure));
     }
+
+    /* At most 512 but at least one block for a dense column/row kernel. */
+    n_blocks_dense_row_kernels = std::min(512, (model_host.nrows + dense_row_col_kernels_blocksize - 1) / dense_row_col_kernels_blocksize);
+    n_blocks_dense_column_kernels = std::min(512, (model_host.ncols + dense_row_col_kernels_blocksize - 1) / dense_row_col_kernels_blocksize);
+
+    assert(0 < n_blocks_dense_row_kernels);
+    assert(0 < n_blocks_dense_column_kernels);
 }
 
 void EvolutionSearch::run(MIPData &data) {
