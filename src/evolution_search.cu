@@ -1893,6 +1893,7 @@ void EvolutionSearch::run(MIPData &data) {
 
                 auto sol_ptr = make_sol_from_thrust_vector(data.mip, data_device.current_sol, objective, true, sum_viol, data_device.streams.front());
                 sol_ptr->timeFound = gStopWatch().elapsed();
+                //TODO: add the move that generated the solution
                 data.solpool.add(std::move(sol_ptr));
 
                 consoleLog("\tSol{} feasible and submitted to Solution Pool!", solution_index);

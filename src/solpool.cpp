@@ -280,12 +280,6 @@ void SolutionPool::print() const
     }
 }
 
-void SolutionPool::mark_solution_rank_parsed(const int i) const {
-    LockGuard lock(*this);
-    pool[solution_rank[i]]->isParsed = true;
-
-}
-
 void SolutionPool::print_stats() const {
     if (!dfs_stats.empty()) {
         consoleLog("FPR Stats");

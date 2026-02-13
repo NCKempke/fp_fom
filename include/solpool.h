@@ -55,9 +55,9 @@ public:
     /* Add solution to pool; if force == true, always add the solution. Returns position of newly added solution. */
     int add(std::unique_ptr<Solution> sol, bool force = false);
 
-    void add(std::unique_ptr<Solution> sol, RankerType ranker, ValueChooserType chooser, bool force = false);
+    int add(std::unique_ptr<Solution> sol, RankerType ranker, ValueChooserType chooser, bool force = false);
 
-    void add(std::unique_ptr<Solution> sol, move_type move, bool force = false);
+    int add(std::unique_ptr<Solution> sol, move_type move, bool force = false);
 
     /* Return a const reference to the solution at index n. The index must be valid! */
     const Solution& getSol(int idx) const;
