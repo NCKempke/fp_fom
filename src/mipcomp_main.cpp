@@ -78,13 +78,13 @@ static void writeSolToFile(const MIPInstance &mip, const std::vector<double> &so
 	consoleLog("Done");
 }
 
-static void write_solutions_worker(const MIPInstance &mip, SolutionPool& sol_pool, std::ofstream& timing_file, double deadline, std::atomic<bool>& should_stop) {
+static void write_solutions_worker(const MIPInstance &mip, SolutionPool& sol_pool, std::ofstream& timing_file, double deadline, std::atomic<bool>* should_stop) {
 	int sol_sequence = 1;
 	double best_obj = INFTY;
 
     consoleLog("Starting writer thread\n");
 
-    while (!should_stop.load(std::memory_order_relaxed)) {
+    while (!should_stop->load(std::memory_order_relaxed)) {
         if (gStopWatch().elapsed() >= deadline) {
             consoleLog("Deadline hit at {} >= {}", gStopWatch().elapsed(), deadline);
             break;
@@ -122,15 +122,15 @@ static void write_solutions_worker(const MIPInstance &mip, SolutionPool& sol_poo
 /* Submit one solution writer thread. The thread iteratively polls the solution pool and, when a new incumbent is found, writes it to file. */
 static std::unique_ptr<std::atomic<bool>> submit_solution_writer(MIPData& mip_data, ThreadPool& thread_pool, std::ofstream& timing_file, double deadline) {
 	consoleInfo("Submitting solution writer thread with deadline {}, current time is {}", deadline, gStopWatch().elapsed());
-	std::unique_ptr<std::atomic<bool>> flag = std::make_unique<std::atomic<bool>>(false);
 
-	auto& flag_ref = *(flag); /* reference to this worker’s flag; to not pass flag as a reference */
+	auto flag = std::make_unique<std::atomic<bool>>(false);
+	auto* flag_ptr = flag.get();
 
-	thread_pool.enqueue([&, deadline]{
-		write_solutions_worker(mip_data.mip, mip_data.solpool, timing_file, deadline, flag_ref);
+	thread_pool.enqueue([&, deadline, flag_ptr]{
+		write_solutions_worker(mip_data.mip, mip_data.solpool, timing_file, deadline, flag_ptr);
 	});
 
-	return flag;
+	return std::move(flag);
 }
 
 /* Submit n fix-and-propagate workers continuously attempting to run some fix and propagate. Return's a vector of n_workers stop flags that can be used to cancel a worker. */
@@ -147,13 +147,17 @@ static std::vector<std::unique_ptr<std::atomic<bool> > > submit_fpr_workers(
 	/* Run all combinations. */
 	for (int i = 0; i < n_workers; ++i)
 	{
-		flags.push_back(std::make_unique<std::atomic<bool>>(false));
-	    auto& flag_ref = *(flags.back()); /* reference to this worker’s flag; to not pass flags as a reference */
+		auto flag = std::make_unique<std::atomic<bool>>(false);
+		auto* flag_ptr = flag.get();
+		flags.push_back(std::move(flag));
+
 		/* clone solver + LP relaxation */
 		MIPModelPtr lp = mip_data.lp->clone();
 
-		thread_pool.enqueue([&, lp, deadline]{
-			fpr_worker(mip_data, lp, strategies, global_counter, deadline, flag_ref, fallback_strat, params);
+	    consoleLog("Starting thread");
+
+		thread_pool.enqueue([&, lp, deadline, flag_ptr]{
+			fpr_worker(mip_data, lp, strategies, global_counter, deadline, flag_ptr, fallback_strat, params);
 		});
 	}
 
@@ -401,7 +405,7 @@ protected:
 		/* Tell everyone to stop. */
 		consoleInfo("Setting stop flags");
 		for (auto & flag : worker_flags) {
-			(*flag).store(true);
+			flag->store(true);
 		}
 
 		(*writer_flag).store(true);

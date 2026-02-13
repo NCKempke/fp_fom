@@ -47,11 +47,10 @@ public:
 
 static void fpr_worker(MIPData &mip_data, MIPModelPtr lp,
                        const std::vector<std::pair<RankerType, ValueChooserType> > &strategies,
-                       std::atomic<size_t> &global_index, const double deadline, const std::atomic<bool> &should_stop,
+                       std::atomic<size_t> &global_index, const double deadline, const std::atomic<bool> *should_stop,
                        const std::pair<RankerType, ValueChooserType>& fallback_strat,
                        Params params) {
     /* Initialize propagation engine and lp solver. */
-    //TODO: AH @ NK the lp is always copied by value. Is it not sufficient to copy it once?
     WorkerFprState state(mip_data, lp);
     int ith_run = 0;
     bool lp_is_ready = false;
@@ -63,9 +62,9 @@ static void fpr_worker(MIPData &mip_data, MIPModelPtr lp,
     if (params.maxNodes == -1)
         params.maxNodes = std::max(params.minNodes, state.mipdata.mip.ncols + 1);
 
-    consoleLog("Starting thread\n");
+    consoleLog("Starting thread");
 
-    while (!should_stop.load(std::memory_order_relaxed)) {
+    while (!should_stop->load(std::memory_order_relaxed)) {
         if (gStopWatch().elapsed() >= deadline) {
             consoleLog("Deadline hit at {} >= {}", gStopWatch().elapsed(), deadline);
             break;
@@ -123,5 +122,6 @@ static void fpr_worker(MIPData &mip_data, MIPModelPtr lp,
         ++ith_run;
     }
 
-    consoleLog("stop requested");
+    consoleLog("Stopping thread\n flag at {} final value {}",
+               (void*)should_stop, should_stop->load());
 }
