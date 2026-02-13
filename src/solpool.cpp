@@ -275,7 +275,7 @@ void SolutionPool::print() const
     {
         const int ith_sol = solution_rank[k];
         const auto& sol = *pool[ith_sol];
-        consoleLog("{:.2f}{:>8}{:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>12.2f}{:>8.2f}  {}", gStopWatch().elapsed(),
+        consoleLog("{:>8}{:>15.2f}{:>15.4f}{:>15.4f}{:>7}{:>12.2f}{:>8.2f}  {}",
                    k, sol.objval, sol.relViolation, sol.absViolation, sol.isFeas, solDistance(best.x, sol.x), sol.timeFound, sol.foundBy);
     }
 }
