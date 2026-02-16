@@ -30,6 +30,8 @@
 #include <atomic>
 #include <vector>
 
+#include "consolelog.h"
+
 /* MIP instance data */
 struct MIPInstance
 {
@@ -110,6 +112,130 @@ inline double rowViol(double minAct, double maxAct, char sense, double rhs)
 		viol = 0.0;
 
 	return viol;
+}
+
+inline void printMIP(const MIPInstance& mip)
+{
+
+    /* =========================
+       OBJECTIVE
+       ========================= */
+
+    if (mip.objSense > 0)
+        consoleLog("Minimize\n  obj: ");
+    else
+        consoleLog("Maximize\n  obj: ");
+
+    bool first = true;
+
+    if (!mip.obj_cols.empty())
+    {
+        for (size_t k = 0; k < mip.obj_cols.size(); ++k)
+        {
+            int j = mip.obj_cols[k];
+            double coef = mip.obj_coefs[k];
+
+
+            if (!first)
+                consoleLogNoBreak(coef >= 0 ? " + " : " - ");
+            else if (coef < 0)
+                consoleLogNoBreak("-");
+
+            const std::string var =
+                mip.cNames.empty() ? "x" + std::to_string(j) : mip.cNames[j];
+
+            consoleLogNoBreak("{} {}", std::fabs(coef), var);
+            first = false;
+        }
+    }
+    else
+    {
+        for (int j = 0; j < mip.ncols; ++j)
+        {
+            double coef = mip.obj[j];
+
+            if (!first)
+                consoleLogNoBreak(coef >= 0 ? " + " : " - ");
+            else if (coef < 0)
+                consoleLogNoBreak("-");
+
+            const std::string var =
+                mip.cNames.empty() ? "x" + std::to_string(j) : mip.cNames[j];
+
+            consoleLogNoBreak("{} {}", std::fabs(coef), var);
+            first = false;
+        }
+    }
+
+        consoleLog(" + {}", mip.objOffset);
+
+    consoleLog("\n\nSubject To\n");
+
+    /* =========================
+       CONSTRAINTS
+       ========================= */
+	auto beg = mip.rows.beg;
+	auto ind = mip.rows.ind;
+	auto val = mip.rows.val;
+    for (int r = 0; r < mip.nrows; ++r) {
+	    const std::string rname =
+			mip.rNames.empty() ? "c" + std::to_string(r) : mip.rNames[r];
+
+    	consoleLogNoBreak("  {}: ", rname);
+
+    	bool firstTerm = true;
+
+
+	    for (int k = beg[r]; k < beg[r + 1]; ++k) {
+    		int j = ind[k];
+    		double coef = val[k];
+
+    		if (!firstTerm)
+    			consoleLogNoBreak(coef >= 0 ? " + " : " - ");
+    		else if (coef < 0)
+    			consoleLogNoBreak("-");
+
+    		const std::string var =
+				mip.cNames.empty() ? "x" + std::to_string(j) : mip.cNames[j];
+
+    		consoleLogNoBreak("{} {}", std::fabs(coef), var);
+    		firstTerm = false;
+    	}
+
+    	if ( r <= mip.n_equalities ) {
+    		consoleLogNoBreak(" = ");
+    	}
+    	else
+    		consoleLogNoBreak(" <= ");
+
+        consoleLog("{}\n", mip.rhs[r]);
+    }
+
+    /* =========================
+       BOUNDS
+       ========================= */
+
+    consoleLog("\nBounds\n");
+
+    for (int j = 0; j < mip.ncols; ++j)
+    {
+        const std::string cname =
+            mip.cNames.empty() ? "x" + std::to_string(j) : mip.cNames[j];
+
+        double lb = mip.lb[j];
+        double ub = mip.ub[j];
+
+        if (lb <= -1e20 && ub >= 1e20)
+            consoleLog("  {} free\n", cname);
+        else if (lb <= -1e20)
+            consoleLog("  {} <= {}\n", cname, ub);
+        else if (ub >= 1e20)
+            consoleLog("  {} <= {}\n", lb, cname);
+        else
+            consoleLog("  {} <= {} <= {}\n", lb, cname, ub);
+    }
+
+    consoleLog("End");
 }
 
 /* sort variables within each row by type ('B','I','C') and within each

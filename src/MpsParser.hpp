@@ -617,11 +617,11 @@ MpsParser::parseCols(boost::iostreams::filtering_istream &file) {
 
             // initialize with default bounds; initialize integral cols with 'I'; we later change that to 'B' when adding bounds
             if (integral_cols) {
-                lb4cols.push_back(-INF);
+                lb4cols.push_back(0);
                 ub4cols.push_back(INF);
                 col_type.emplace_back('I');
             } else {
-                lb4cols.push_back(-INF);
+                lb4cols.push_back(0);
                 ub4cols.push_back(INF);
                 col_type.emplace_back('C');
             }
