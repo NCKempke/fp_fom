@@ -58,7 +58,7 @@ static void fpr_worker(MIPData &mip_data, MIPModelPtr lp,
     uint64_t seed_orig = params.seed;
 
     params.threads = 1;
-    params.enableOutput = false;
+    params.enableOutput = true;
     if (params.maxNodes == -1)
         params.maxNodes = std::max(params.minNodes, state.mipdata.mip.ncols + 1);
 
@@ -93,6 +93,7 @@ static void fpr_worker(MIPData &mip_data, MIPModelPtr lp,
         if ((needs_lp && !lp_is_ready) || (needs_partial_sol && mip_data.partials.n_sols() == 0)) {
             params.ranker = fallback_strat.first;
             params.valueChooser = fallback_strat.second;
+            continue;
         }
         else {
             // All required data available → use requested strategy.

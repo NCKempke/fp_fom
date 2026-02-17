@@ -299,7 +299,7 @@ struct Params
 public:
 	/* Global parameters */
 	uint64_t seed = 20250101;
-	double timeLimit = 3000;
+	double timeLimit = 300;
 	int threads = 32;
 	int maxTries = 1;
 
@@ -327,7 +327,7 @@ public:
 	ValueChooserType valueChooser = ValueChooserType::RANDOM_LP;
 	LpAlgorithmType lpMethod = LpAlgorithmType::BARRIER;
 	LpAlgorithmType lpMethodFinal = LpAlgorithmType::BARRIER;
-	bool mipPresolve = true; /** Whether to presolver the problem. */
+	bool mipPresolve = false; /** Whether to presolver the problem. */
 	bool postsolve = false;	 /** Whether to postsolve found solutions. */
 	bool writeSol = false;  /** Whether to print the final solution. */
 	bool zeroObj = false;	 /** Whether to zero out the objective of the LP relaxation. */

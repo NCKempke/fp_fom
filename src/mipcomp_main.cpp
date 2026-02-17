@@ -280,11 +280,11 @@ protected:
 		params.mipPresolve = false;
 		params.postsolve = false;
 		params.writeSol = true;
-		params.lpMethod = LpAlgorithmType::FIRST_ORDER_METHOD;
-		params.lpTol = 1e-4;
+		params.lpMethod = LpAlgorithmType::BARRIER;
+		params.lpTol = 1e-6;
 
 		/* Solver settings. */
-		params.solver = SolverType::GUROBI;
+		params.solver = SolverType::COPT;
 		params.presolver = SolverType::UNKNOWN;
 
 		params.solveLp = true;
@@ -357,19 +357,19 @@ protected:
 
 		// TODO: we need LP free methods here as well to run until the LP is solved.
 		const static std::vector<std::pair<RankerType, ValueChooserType>> fpr_queue_cpu = {
-			{RankerType::FRAC, ValueChooserType::RANDOM_LP},
-			{RankerType::DUALS, ValueChooserType::RANDOM_LP},
-			{RankerType::RANDOM, ValueChooserType::RANDOM_LP},
-			{RankerType::REDCOSTS, ValueChooserType::RANDOM_LP},
+			// {RankerType::FRAC, ValueChooserType::RANDOM_LP},
+			// {RankerType::DUALS, ValueChooserType::RANDOM_LP},
+			// {RankerType::RANDOM, ValueChooserType::RANDOM_LP},
+			// {RankerType::REDCOSTS, ValueChooserType::RANDOM_LP},
 			{RankerType::TYPE, ValueChooserType::RANDOM_LP},
-			{RankerType::TYPE, ValueChooserType::RANDOM_GUIDED},
-			{RankerType::ROW_VIOLATION, ValueChooserType::RANDOM_GUIDED},
+			// {RankerType::TYPE, ValueChooserType::RANDOM_GUIDED},
+			// {RankerType::ROW_VIOLATION, ValueChooserType::RANDOM_GUIDED},
 		};
 
 		static constexpr std::pair fallback_strategy = {RankerType::TYPE, ValueChooserType::RANDOM};
 
 		std::vector<std::unique_ptr<std::atomic<bool>>> worker_flags = submit_fpr_workers(
-			*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, finish_time, 5, fallback_strategy, params);
+			*mip_data, thread_pool, fpr_queue_cpu, fpr_counter, finish_time, 1, fallback_strategy, params);
 
 		/* We run in parallel: The root LP using PDLP, 6 CPU fix-and-propagate threads, 1 thread running the GPU evolution search.
 		 *
@@ -389,7 +389,7 @@ protected:
 
 		consoleInfo("Running evo search");
 		EvolutionSearch evo_search(mip, gpu_data);
-		evo_search.run(*mip_data);
+		// evo_search.run(*mip_data);
 
 		// TODO: now, check the pool for new incumbents and write these out + write the timing file. Also, check for the finished root LP thread. Either start one more FPR or resolve the root LP to higher accuracy? Though this messes with GPU ..
 		// TODO: Communicate stop if the threads do not stop themselves!
