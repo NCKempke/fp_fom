@@ -267,6 +267,8 @@ void LinearPropagator::propagateOneRow(PropagationEngine &engine, int i)
 	const bool is_objective = (i == mip.nrows);
 	const char sense = is_objective ? obj_sense : mip.sense[i];
 	const double rhs = is_objective ? obj_rhs : mip.rhs[i];
+	if (is_objective && obj_rhs == INFTY)
+		return;
 
 	bool rowHasLB = (sense != 'L');
 	bool rowHasUB = (sense != 'G');

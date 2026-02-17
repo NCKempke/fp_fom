@@ -274,7 +274,7 @@ protected:
 		params.threads = 8;
 		params.timeLimit = 300;
 
-		params.propagate_objective = true; // TODO: tune this
+		params.propagate_objective = false; // TODO: tune this
 		params.repair = true;
 		params.repair_objective = true; // TODO: tune this
 		params.mipPresolve = false;
@@ -389,14 +389,14 @@ protected:
 
 		consoleInfo("Running evo search");
 		EvolutionSearch evo_search(mip, gpu_data);
-		evo_search.run(*mip_data);
+		// evo_search.run(*mip_data);
 
 		// TODO: now, check the pool for new incumbents and write these out + write the timing file. Also, check for the finished root LP thread. Either start one more FPR or resolve the root LP to higher accuracy? Though this messes with GPU ..
 		// TODO: Communicate stop if the threads do not stop themselves!
 
 		/* For now, run at least 10 seconds. */
 		using namespace std::chrono_literals;
-		while (gStopWatch().elapsed() < 10) {
+		while (gStopWatch().elapsed() < params.timeLimit) {
 			std::this_thread::sleep_for(1ms);
 		}
 
