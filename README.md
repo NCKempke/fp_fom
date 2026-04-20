@@ -1,6 +1,6 @@
 # Fix-and-Propagate Heuristics Using Low-Precision First-Order LP Solutions for Large-Scale Mixed-Integer Linear Optimization
 
-This repository contains the code used in [[1]](#1) and [[2]](#2) for solving large scale energy system models. Experimental logs for [[1]](#1) are available at [[4]](#4) and the models used in [[1]](#1) and [[2]](#2) can be found in [[5]](#5) (and a set of Gurobi presolved models can be found in [[6]](#6)). The code is derived from [[3]](#3) with permission of the author.
+This repository contains the code used in [[1]](#1) and [[2]](#2) for solving large scale energy system models. Experimental logs for [[1]](#1) are available in [[4]](#4) and the models used in [[1]](#1) and [[2]](#2) can be found in [[5]](#5) (and a set of Gurobi presolved models can be found in [[6]](#6)). The code is derived from [[3]](#3) with permission of the author.
 
 ## Compile
 
