@@ -129,6 +129,158 @@ public:
 	}
 };
 
+class ByObj : public Ranker
+{
+public:
+	virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) override
+	{
+		FP_ASSERT(data.mip.ncols == (data.nBinaries + data.nIntegers + data.nContinuous));
+		// bucket sort by type
+		std::vector<int> sorted(data.mip.ncols - data.nContinuous);
+		int startBin = 0;
+		int startInt = startBin + data.nBinaries;
+		for (int j = 0; j < data.mip.ncols; j++)
+		{
+			if (data.mip.xtype[j] == 'B')
+				sorted[startBin++] = j;
+			else if (data.mip.xtype[j] == 'I')
+				sorted[startInt++] = j;
+		}
+		FP_ASSERT(startBin == data.nBinaries);
+		FP_ASSERT(startInt == (data.nBinaries + data.nIntegers));
+
+		std::sort(sorted.begin(), sorted.end(), [&](int v1, int v2)
+				  { return (data.mip.obj[v1] * (domain.ub(v1) - domain.lb(v1)) > data.mip.obj[v2] * (domain.ub(v2) - domain.lb(v2))); });
+
+		return sorted;
+	}
+};
+
+class ByInferObj : public Ranker
+{
+public:
+	ByInferObj(uint64_t seed) : Ranker{seed} {}
+
+	virtual std::vector<int> operator()(const MIPData &data, const Domain &domain) override
+	{
+		printf("Using the INFEROBJ ranker!\n");
+
+		FP_ASSERT(data.mip.ncols == (data.nBinaries + data.nIntegers + data.nContinuous));
+		// bucket sort by type
+		std::vector<int> sorted(data.mip.ncols - data.nContinuous);
+		int startBin = 0;
+		int startInt = startBin + data.nBinaries;
+		for (int j = 0; j < data.mip.ncols; j++)
+		{
+			if (data.mip.xtype[j] == 'B')
+				sorted[startBin++] = j;
+			else if (data.mip.xtype[j] == 'I')
+				sorted[startInt++] = j;
+		}
+		FP_ASSERT(startBin == data.nBinaries);
+		FP_ASSERT(startInt == (data.nBinaries + data.nIntegers));
+
+		std::mt19937_64 rndgen;
+		rndgen.seed(seed);
+		std::shuffle(sorted.begin(), sorted.end(), rndgen);
+
+		std::vector<double> score(data.mip.ncols, 0.0);
+		std::vector<int> marked(data.mip.ncols, -1);
+
+		for (int iNz = 0; iNz < data.mip.ncols; ++iNz)
+		{
+			double obj = data.mip.objSense * data.mip.obj[iNz];
+			if (obj > 0.0)
+			{
+				score[iNz] = -1.0;
+			}
+			else if (obj < 0.0)
+			{
+				score[iNz] = 1.0;
+			}
+			else
+				score[iNz] = 0.0;
+		}
+
+		for (int iRound = 0; iRound < 10; ++iRound)
+		{
+			for (size_t iNzSorted = 0; iNzSorted < sorted.size(); ++iNzSorted)
+			{
+				int jCol = sorted[iNzSorted];
+				int colStart = data.mip.cols.beg[jCol];
+				int nCol = data.mip.cols.cnt[jCol];
+				double colObj = score[jCol]; // data.mip.objSense * data.mip.obj[jCol];
+				// score[jCol] = colObj;
+				marked[jCol] = jCol;
+
+				for (int iNz = colStart; iNz < colStart + nCol; ++iNz)
+				{
+					double colCoef = data.mip.cols.val[iNz];
+
+					int iRow = data.mip.cols.ind[iNz];
+					int rowStart = data.mip.rows.beg[iRow];
+					int nRow = data.mip.rows.cnt[iRow];
+					char rowType = data.mip.sense[iRow];
+
+					/* Is our column blocked in objective direction by the row? Zero objective is counted as pushing here! */
+					if (rowType = 'L' && colObj * colCoef > 0.0)
+					{
+						/* ax <= c but either x pushing down and a positive or x pushing up and a negative - so non-blocking */
+						continue;
+					}
+					else if (rowType == 'G' && colObj * colCoef < 0.0)
+					{
+						/* ax >= c but either x pushing down and a negative or x pushing up and a positive - so non-blocking */
+						continue;
+					}
+					else
+						continue;
+
+					/* We know this row is blocking in objective direction. */
+					for (int iNzRow = rowStart; iNzRow < rowStart + nRow; ++iNzRow)
+					{
+						int jColOther = data.mip.rows.ind[iNzRow];
+
+						if (jColOther == jCol)
+							continue;
+						FP_ASSERT(jColOther < data.mip.ncols);
+						// if (marked[jColOther] != jCol)
+						{
+							double otherCoef = data.mip.rows.val[iNzRow];
+							double otherObj = score[otherCoef];
+							marked[jColOther] = jCol;
+
+							/* Is our other col blocked in objective direction by the row? Zero objective not counted here! */
+							if (rowType = 'L' && (otherCoef * otherObj <= 0.0))
+							{
+								/* ax <= c but either x pushing down and a positive or x pushing up and a negative - so non-blocking */
+								continue;
+							}
+							else if (rowType == 'G' && (otherCoef * otherObj >= 0.0))
+							{
+								/* ax >= c but either x pushing down and a negative or x pushing up and a positive - so non-blocking */
+								continue;
+							}
+							else
+								continue;
+							/* Update the virtual objective. */
+							score[jCol] -= otherObj;
+						}
+					}
+				}
+			}
+		}
+
+		std::sort(sorted.begin(), sorted.end(), [&](int v1, int v2)
+				  {
+					  return score[v1] < score[v2];
+					  // return (score[v1] * (domain.ub(v1) - domain.lb(v1)) > score[v2] * (domain.ub(v2) - domain.lb(v2)));
+				  });
+
+		return sorted;
+	}
+};
+
 class ByFrac : public Ranker
 {
 public:
@@ -742,6 +894,134 @@ public:
 	}
 };
 
+class InferObjDirection : public ValueChooser
+{
+public:
+	InferObjDirection(const MIPData &data)
+	{
+		FP_ASSERT(data.mip.ncols == (data.nBinaries + data.nIntegers + data.nContinuous));
+		// bucket sort by type
+		std::vector<int> sorted(data.mip.ncols - data.nContinuous);
+		int startBin = 0;
+		int startInt = startBin + data.nBinaries;
+		for (int j = 0; j < data.mip.ncols; j++)
+		{
+			if (data.mip.xtype[j] == 'B')
+				sorted[startBin++] = j;
+			else if (data.mip.xtype[j] == 'I')
+				sorted[startInt++] = j;
+		}
+		FP_ASSERT(startBin == data.nBinaries);
+		FP_ASSERT(startInt == (data.nBinaries + data.nIntegers));
+
+		std::mt19937_64 rndgen;
+		rndgen.seed(seed);
+		std::shuffle(sorted.begin(), sorted.end(), rndgen);
+
+		std::vector<double> score(data.mip.ncols, 0.0);
+		std::vector<int> marked(data.mip.ncols, -1);
+
+		for (int iNz = 0; iNz < data.mip.ncols; ++iNz)
+		{
+			double obj = data.mip.objSense * data.mip.obj[iNz];
+			if (obj > 0.0)
+			{
+				score[iNz] = -1.0;
+			}
+			else if (obj < 0.0)
+			{
+				score[iNz] = 1.0;
+			}
+			else
+				score[iNz] = 0.0;
+		}
+
+		for (int iRound = 0; iRound < 10; ++iRound)
+		{
+			for (size_t iNzSorted = 0; iNzSorted < sorted.size(); ++iNzSorted)
+			{
+				int jCol = sorted[iNzSorted];
+				int colStart = data.mip.cols.beg[jCol];
+				int nCol = data.mip.cols.cnt[jCol];
+				double colObj = score[jCol]; // data.mip.objSense * data.mip.obj[jCol];
+				// score[jCol] = colObj;
+				marked[jCol] = jCol;
+
+				for (int iNz = colStart; iNz < colStart + nCol; ++iNz)
+				{
+					double colCoef = data.mip.cols.val[iNz];
+
+					int iRow = data.mip.cols.ind[iNz];
+					int rowStart = data.mip.rows.beg[iRow];
+					int nRow = data.mip.rows.cnt[iRow];
+					char rowType = data.mip.sense[iRow];
+
+					/* Is our column blocked in objective direction by the row? Zero objective is counted as pushing here! */
+					if (rowType = 'L' && colObj * colCoef > 0.0)
+					{
+						/* ax <= c but either x pushing down and a positive or x pushing up and a negative - so non-blocking */
+						continue;
+					}
+					else if (rowType == 'G' && colObj * colCoef < 0.0)
+					{
+						/* ax >= c but either x pushing down and a negative or x pushing up and a positive - so non-blocking */
+						continue;
+					}
+
+					/* We know this row is blocking in objective direction. */
+					for (int iNzRow = rowStart; iNzRow < rowStart + nRow; ++iNzRow)
+					{
+						int jColOther = data.mip.rows.ind[iNzRow];
+
+						if (jColOther == jCol)
+							continue;
+						FP_ASSERT(jColOther < data.mip.ncols);
+						// if (marked[jColOther] != jCol)
+						{
+							double otherCoef = data.mip.rows.val[iNzRow];
+							double otherObj = score[otherCoef];
+							marked[jColOther] = jCol;
+
+							/* Is our other col blocked in objective direction by the row? Zero objective not counted here! */
+							if (rowType = 'L' && (otherCoef * otherObj <= 0.0))
+							{
+								/* ax <= c but either x pushing down and a positive or x pushing up and a negative - so non-blocking */
+								continue;
+							}
+							else if (rowType == 'G' && (otherCoef * otherObj >= 0.0))
+							{
+								/* ax >= c but either x pushing down and a negative or x pushing up and a positive - so non-blocking */
+								continue;
+							}
+
+							/* Update the virtual objective. */
+							score[jCol] -= otherObj;
+						}
+					}
+				}
+			}
+		}
+
+		direction.resize(data.mip.ncols);
+
+		for (int iNz = 0; iNz < data.mip.ncols; ++iNz)
+		{
+			if (score[iNz] < 0)
+				direction[iNz] = -1;
+			else
+				direction[iNz] = 1;
+		}
+	}
+
+	virtual double operator()(const MIPData &data, const Domain &domain, int var) override
+	{
+		return (direction[var] == -1) ? domain.lb(var) : domain.ub(var);
+	}
+
+private:
+	std::vector<int> direction;
+};
+
 class BadObj : public ValueChooser
 {
 public:
@@ -1055,6 +1335,10 @@ RankerPtr makeRanker(RankerType ranker, const Params &params, const MIPData &dat
 		return RankerPtr{new LR()};
 	case RankerType::TYPE:
 		return RankerPtr{new ByType()};
+	case RankerType::OBJ:
+		return RankerPtr{new ByObj()};
+	case RankerType::INFER_OBJ:
+		return RankerPtr{new ByInferObj(params.seed)};
 	case RankerType::TYPECL:
 		return RankerPtr{new ByTypeCl()};
 	case RankerType::LOCKS:
@@ -1095,6 +1379,8 @@ ValuePtr makeValueChooser(ValueChooserType value_chooser, const Params &params, 
 		return ValuePtr{new GoodObj()};
 	case ValueChooserType::BAD_OBJ:
 		return ValuePtr{new BadObj()};
+	case ValueChooserType::INFER_OBJ:
+		return ValuePtr{new InferObjDirection(data)};
 	case ValueChooserType::RANDOM:
 		return ValuePtr{new RandomValue(params.seed)};
 	case ValueChooserType::LOOSE:

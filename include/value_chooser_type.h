@@ -18,6 +18,7 @@ enum class ValueChooserType
     UNKNOWN,
     GOOD_OBJ,
     BAD_OBJ,
+    INFER_OBJ,
     RANDOM,
     LOOSE,
     RANDOM_LP, // Random rounding of LP relaxation.

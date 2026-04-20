@@ -17,6 +17,8 @@ enum class RankerType
 {
     LR,
     TYPE,
+    OBJ,
+    INFER_OBJ,
     TYPECL,
     LOCKS,
     CLIQUES,

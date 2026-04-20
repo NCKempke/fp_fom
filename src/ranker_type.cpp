@@ -19,6 +19,8 @@
 const std::unordered_map<std::string, RankerType> rankerTypeMap = {
     {"lr", RankerType::LR},
     {"type", RankerType::TYPE},
+    {"obj", RankerType::OBJ},
+    {"infer_obj", RankerType::INFER_OBJ},
     {"typecl", RankerType::TYPECL},
     {"locks", RankerType::LOCKS},
     {"cliques", RankerType::CLIQUES},
@@ -67,6 +69,10 @@ std::string toString(RankerType rankerType)
         return "LR";
     case RankerType::TYPE:
         return "TYPE";
+    case RankerType::OBJ:
+        return "OBJ";
+    case RankerType::INFER_OBJ:
+        return "INFER_OBJ";
     case RankerType::TYPECL:
         return "TYPECL";
     case RankerType::LOCKS:

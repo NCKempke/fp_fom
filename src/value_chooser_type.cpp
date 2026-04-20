@@ -19,6 +19,7 @@
 static const std::unordered_map<std::string, ValueChooserType> valueChooserTypeMap = {
     {"good_obj", ValueChooserType::GOOD_OBJ},
     {"bad_obj", ValueChooserType::BAD_OBJ},
+    {"infer_obj", ValueChooserType::INFER_OBJ},
     {"random", ValueChooserType::RANDOM},
     {"loose", ValueChooserType::LOOSE},
     {"random_lp", ValueChooserType::RANDOM_LP},
@@ -58,6 +59,8 @@ std::string toString(ValueChooserType valueChooser)
         return "GOOD_OBJ";
     case ValueChooserType::BAD_OBJ:
         return "BAD_OBJ";
+    case ValueChooserType::INFER_OBJ:
+        return "INFER_OBJ";
     case ValueChooserType::RANDOM:
         return "RANDOM";
     case ValueChooserType::LOOSE:

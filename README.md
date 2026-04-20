@@ -66,26 +66,29 @@ Available rankers are:
 redcostsbreakfrac
 lr
 cliques
+obj
+infer_obj
+dualsbreakfrac
 type
 typecl
 random
 locks
-redcosts
 fracbreakduals
+redcosts
 cliquess
 duals
-dualsbreakfrac
-frac
 fracbreakredcosts
+frac
 
 Available value choosers are:
 split
 round_int
 random_up_down
 random_lp
+random
 up
 loose
-random
+infer_obj
 down
 bad_obj
 good_obj
@@ -117,7 +120,7 @@ For example, running PDLP based fix-and-propagate as the redcost strategy for ra
 fp_main <path_to_instance>/<instance_name> presolver=GUROBI solver=COPT lpMethod=FOM ranker=REDCOSTS valueChooser=RANDOM_LP
 ```
 
-The best solution found will be written to a file called <instance_name>.sol only if either presolve is turned off or CPLEX is specified as PRESOLVER. Gurobi does not support postsolve. Further examples on how to utilize `fp_main` together with scripts for easy execution can be found in [[4]](#4).
+The best solution found will be written to a file called <instance_name>.sol only if either presolve is turned off or CPLEX is specified as PRESOLVER. Gurobi does not support postsolve. Further examples on how to utilize `fp_main` together with scripts for easy execution can be found in [[4]](#4). The inferred objective fix-and-propagate variant from [[2]](#2) can be run by setting `ranker=INFER_OBJ valueChooser=INFER_OBJ`.
 
 A typical example looks like
 
